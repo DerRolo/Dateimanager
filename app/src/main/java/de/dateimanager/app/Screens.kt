@@ -155,7 +155,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                             title = {
                                 TextField(
                                     value = vm.query,
-                                    onValueChange = { vm.setQuery(it) },
+                                    onValueChange = { vm.updateQuery(it) },
                                     placeholder = { Text("Suchen…") },
                                     singleLine = true,
                                     colors = TextFieldDefaults.colors(

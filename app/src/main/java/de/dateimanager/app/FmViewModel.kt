@@ -143,7 +143,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         if (had && section == Section.Browse) reload()
     }
 
-    fun setQuery(q: String) {
+    fun updateQuery(q: String) {
         query = q
         if (section == Section.Browse) reload()
     }
