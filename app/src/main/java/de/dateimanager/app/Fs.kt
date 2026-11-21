@@ -159,6 +159,70 @@ object Fs {
         return out
     }
 
+    /** Erweiterte Suche: Name, Typ, Größe und Alter kombinierbar (über die Medien-Datenbank). */
+    fun advanced(ctx: Context, q: String, type: AdvType, size: AdvSize, age: AdvAge): List<FileItem> {
+        val parts = ArrayList<String>()
+        val args = ArrayList<String>()
+        if (q.isNotBlank()) {
+            parts.add("${FileColumns.DISPLAY_NAME} LIKE ?")
+            args.add("%" + q.trim() + "%")
+        }
+        when (type) {
+            AdvType.Images -> {
+                parts.add("${FileColumns.MEDIA_TYPE}=?")
+                args.add(FileColumns.MEDIA_TYPE_IMAGE.toString())
+            }
+            AdvType.Videos -> {
+                parts.add("${FileColumns.MEDIA_TYPE}=?")
+                args.add(FileColumns.MEDIA_TYPE_VIDEO.toString())
+            }
+            AdvType.Audio -> {
+                parts.add("${FileColumns.MEDIA_TYPE}=?")
+                args.add(FileColumns.MEDIA_TYPE_AUDIO.toString())
+            }
+            AdvType.Docs -> {
+                val (s1, a1) = likeAny(DOC_EXTS.map { "%.$it" })
+                parts.add(s1)
+                args.addAll(a1)
+            }
+            AdvType.Archives -> {
+                val (s2, a2) = likeAny(ARCHIVE_EXTS.map { "%.$it" })
+                parts.add(s2)
+                args.addAll(a2)
+            }
+            AdvType.All -> {}
+        }
+        if (size.mb > 0L) {
+            parts.add("${FileColumns.SIZE}>=?")
+            args.add((size.mb * 1024L * 1024L).toString())
+        }
+        val nowSec = System.currentTimeMillis() / 1000
+        if (age.days > 0) {
+            parts.add("${FileColumns.DATE_MODIFIED}>=?")
+            args.add((nowSec - age.days * 86400L).toString())
+        } else if (age.days < 0) {
+            parts.add("${FileColumns.DATE_MODIFIED}<?")
+            args.add((nowSec + age.days * 86400L).toString())
+        }
+        if (parts.isEmpty()) return emptyList()
+        val out = ArrayList<FileItem>()
+        val seen = HashSet<String>()
+        val uri = MediaStore.Files.getContentUri("external")
+        ctx.contentResolver.query(
+            uri, arrayOf(FileColumns.DATA), parts.joinToString(" AND "), args.toTypedArray(), null
+        )?.use { c ->
+            val iData = c.getColumnIndexOrThrow(FileColumns.DATA)
+            while (c.moveToNext() && out.size < 2000) {
+                val p = c.getString(iData) ?: continue
+                if (p.contains("/.") || p.contains("/Android/data/")) continue
+                val f = File(p)
+                if (!f.isFile || !seen.add(p)) continue
+                out += itemOf(f)
+            }
+        }
+        return out
+    }
+
     /** Belegung pro Speicher, aufgeteilt nach Bildern, Videos, Musik, Aufnahmen, Dokumenten. */
     fun storageStats(ctx: Context, roots: List<Root>): List<VolumeStats> {
         val n = roots.size
@@ -167,6 +231,8 @@ object Fs {
         val mus = LongArray(n)
         val rec = LongArray(n)
         val doc = LongArray(n)
+        val app = LongArray(n)
+        val bak = LongArray(n)
         val uri = MediaStore.Files.getContentUri("external")
         val proj = arrayOf(FileColumns.DATA, FileColumns.SIZE, FileColumns.MEDIA_TYPE)
         ctx.contentResolver.query(uri, proj, null, null, null)?.use { c ->
@@ -184,14 +250,20 @@ object Fs {
                 else if (type == FileColumns.MEDIA_TYPE_VIDEO) vid[vi] += size
                 else if (type == FileColumns.MEDIA_TYPE_AUDIO) {
                     if (isRecordingPath(p)) rec[vi] += size else mus[vi] += size
-                } else if (p.substringAfterLast('.', "").lowercase() in DOC_EXTS) doc[vi] += size
+                } else if (p.substringAfterLast('.', "").lowercase() in DOC_EXTS) {
+                    doc[vi] += size
+                } else {
+                    val cls = OtherFilter.classifyPath(p)
+                    if (cls == OtherFilter.Backups) bak[vi] += size
+                    else if (cls == OtherFilter.Apps) app[vi] += size
+                }
             }
         }
         val out = ArrayList<VolumeStats>()
         roots.forEachIndexed { i, r ->
             try {
                 val st = StatFs(r.dir.path)
-                out.add(VolumeStats(r.name, st.totalBytes, st.availableBytes, img[i], vid[i], mus[i], rec[i], doc[i]))
+                out.add(VolumeStats(r.name, st.totalBytes, st.availableBytes, img[i], vid[i], mus[i], rec[i], doc[i], app[i], bak[i]))
             } catch (e: Exception) {
             }
         }

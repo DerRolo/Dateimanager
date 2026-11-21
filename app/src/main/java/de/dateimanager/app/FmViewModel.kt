@@ -1,6 +1,9 @@
 package de.dateimanager.app
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import android.widget.Toast
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -15,6 +18,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.security.MessageDigest
 
 class FmViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -33,6 +37,15 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app: Application = application
     private val prefs = app.getSharedPreferences("settings", 0)
+
+    private fun loadCloudRoots(): List<Pair<String, String>> {
+        val out = ArrayList<Pair<String, String>>()
+        for (e in prefs.getStringSet("cloud", emptySet()) ?: emptySet()) {
+            val p = e.split('\t')
+            if (p.size == 2) out.add(Pair(p[0], p[1]))
+        }
+        return out
+    }
 
     private fun loadSet(key: String): Set<String> = prefs.getStringSet(key, emptySet())?.toSet() ?: emptySet()
 
@@ -68,10 +81,25 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     var pdfQuick by mutableStateOf(prefs.getBoolean("pdf_quick", true))
     val marks = Marks(prefs)
     var docFilter by mutableStateOf(DocFilter.All)
+    var otherFilter by mutableStateOf(OtherFilter.All)
+    var trashDays by mutableStateOf(prefs.getInt("trash_days", 30))
+    private var otherBack = Section.Storage
+    var cleanupFilter by mutableStateOf(CleanupFilter.EmptyFolders)
+    var advQuery by mutableStateOf("")
+    var advType by mutableStateOf(AdvType.All)
+    var advSize by mutableStateOf(AdvSize.Any)
+    var advAge by mutableStateOf(AdvAge.Any)
+    var simResults by mutableStateOf<Map<Section, List<DupGroup>>>(emptyMap())
+    var showSimilar by mutableStateOf(false)
+    var vaultHasPin by mutableStateOf(prefs.contains("vault_hash"))
+    var vaultUnlocked by mutableStateOf(false)
+    var cloudRoots by mutableStateOf(loadCloudRoots())
+    var cloudPath by mutableStateOf<List<CloudNode>>(emptyList())
+    var cloudItems by mutableStateOf<List<CloudItem>>(emptyList())
+    var cloudBusy by mutableStateOf(false)
 
     private var job: Job? = null
     private var dupJob: Job? = null
-    private var purged = false
     private val sortMemory = mutableMapOf<Section, Pair<SortBy, Boolean>>()
     private val subModeMemory = mutableMapOf<Section, SubMode>()
 
@@ -131,9 +159,10 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     // ---------- Zeilen für die Anzeige ----------
 
     private fun buildRows(): List<Row> {
-        if (section == Section.Storage || section == Section.More) return emptyList()
+        if (section == Section.Storage || section == Section.More || section == Section.Cloud) return emptyList()
         var list = items
         if (section == Section.Docs && docFilter != DocFilter.All) list = list.filter { docFilter.matches(it.ext) }
+        if (section == Section.Other && otherFilter != OtherFilter.All) list = list.filter { otherFilter.matches(it) }
         if (section == Section.Collections) {
             val ad = albumDir
             if (ad == null) return tagRows()
@@ -189,12 +218,12 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
                 cnt += a.count
                 sz += a.size
             }
-            out.add(Row.Header("Nicht zugeordnet"))
-            out.add(Row.Album(AlbumInfo(INBOX, "Alle nicht zugeordneten", cnt, sz, newest.newest, newest.cover, true)))
+            out.add(Row.Header("Ohne Album – Kamera, Screenshots, Downloads …"))
+            out.add(Row.Album(AlbumInfo(INBOX, "Alle Dateien ohne Album", cnt, sz, newest.newest, newest.cover, true)))
             for (a in sortAlbums(inbox)) out.add(Row.Album(a))
         }
         if (real.isNotEmpty()) {
-            out.add(Row.Header("Alben"))
+            out.add(Row.Header("Deine Alben"))
             for (a in sortAlbums(real)) out.add(Row.Album(a))
         }
         return out
@@ -227,13 +256,16 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         ).first()
 
     private fun dupRows(): List<Row> {
-        val groups = dupResults[section].orEmpty()
+        val src = if (showSimilar && section == Section.Images) simResults else dupResults
+        val groups = src[section].orEmpty()
         val tagged = HashSet<String>()
         for (st in marks.tags.values) tagged.addAll(st)
         return groups.flatMapIndexed { i, g ->
             val keep = suggestKeep(g.files, tagged)
             val ordered = listOf(keep) + g.files.filter { it.path != keep.path }
-            val label = if (g.verified) {
+            val label = if (g.similar) {
+                "${g.files.size} ähnliche Bilder · visuell verwandt, Größe und Qualität können abweichen"
+            } else if (g.verified) {
                 "${g.files.size} identische Dateien · ${Fs.formatSize(g.size)} je Datei · Inhalt geprüft"
             } else {
                 "${g.files.size} mögliche Duplikate · ${Fs.formatSize(g.size)} · gleicher Name + Größe"
@@ -244,7 +276,8 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dupSummary(): String {
-        val g = dupResults[section] ?: return "Sucht Dateien mit gleicher Größe und prüft danach den Inhalt."
+        val src = if (showSimilar && section == Section.Images) simResults else dupResults
+        val g = src[section] ?: return "Sucht Dateien mit gleicher Größe und prüft danach den Inhalt."
         if (g.isEmpty()) return "Keine Duplikate gefunden."
         var extra = 0
         var bytes = 0L
@@ -259,8 +292,8 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun defaultSort(s: Section): Pair<SortBy, Boolean> = when (s) {
         Section.Recent, Section.Images, Section.Videos, Section.Trash, Section.Downloads, Section.Screenshots,
-        Section.Archives, Section.Recordings -> SortBy.Date to false
-        Section.Other, Section.Largest -> SortBy.Size to false
+        Section.Archives, Section.Recordings, Section.Search, Section.Vault -> SortBy.Date to false
+        Section.Other, Section.Largest, Section.Cleanup -> SortBy.Size to false
         else -> SortBy.Name to true
     }
 
@@ -273,10 +306,10 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         roots = Fs.roots(app)
         if (dir == null) dir = roots.firstOrNull()?.dir
         reload()
-        if (!purged) {
-            purged = true
+        val days = trashDays
+        if (days > 0) {
             val rs = roots
-            viewModelScope.launch(Dispatchers.IO) { Trash.purge(rs, 30) }
+            viewModelScope.launch(Dispatchers.IO) { Trash.purge(rs, days) }
         }
     }
 
@@ -287,9 +320,15 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         val d = dir
         val hidden = showHidden
         val rs = roots
+        val cf = cleanupFilter
+        val aq = advQuery
+        val at = advType
+        val asz = advSize
+        val aa = advAge
+        val vaultOpen = vaultUnlocked
         job = viewModelScope.launch {
             loading = true
-            if (s == Section.Browse && q.isNotEmpty()) delay(300)
+            if ((s == Section.Browse && q.isNotEmpty()) || s == Section.Search) delay(300)
             if (s == Section.Storage) {
                 storage = withContext(Dispatchers.IO) { Fs.storageStats(app, rs) }
             } else {
@@ -301,7 +340,10 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
                             else Fs.search(d, q, hidden) { isActive }
                         }
                         Section.Trash -> Trash.list(rs)
-                        Section.More -> emptyList<FileItem>()
+                        Section.More, Section.Cloud -> emptyList<FileItem>()
+                        Section.Vault -> if (vaultOpen) Vault.list(rs) else emptyList<FileItem>()
+                        Section.Cleanup -> Cleanup.find(app, rs, cf) { isActive }
+                        Section.Search -> Fs.advanced(app, aq, at, asz, aa)
                         Section.Favorites -> pathItems(marks.favorites)
                         Section.Locked -> pathItems(marks.locked)
                         Section.Collections -> pathItems(marks.tags.values.flatten().distinct())
@@ -318,6 +360,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSection(s: Section) {
         if (s == section) return
+        if (section == Section.Vault) vaultUnlocked = false
         sortMemory[section] = sortBy to asc
         subModeMemory[section] = subMode
         section = s
@@ -364,8 +407,9 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
             searching -> closeSearch()
             albumDir != null -> albumDir = null
             canGoUp() -> openDir(dir!!.parentFile!!)
-            section == Section.Other -> selectSection(Section.Storage)
+            section == Section.Other -> selectSection(otherBack)
             section == Section.Trash -> selectSection(Section.Browse)
+            section == Section.Cloud && cloudPath.isNotEmpty() -> cloudUp()
             !section.inTabs -> selectSection(Section.More)
         }
     }
@@ -458,7 +502,28 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleHidden() {
         showHidden = !showHidden
-        reload()
+        toast(
+            if (showHidden) "Versteckte Dateien (Name beginnt mit Punkt) sind jetzt im Reiter „Dateien“ sichtbar"
+            else "Versteckte Dateien sind wieder ausgeblendet"
+        )
+        if (section != Section.Browse) selectSection(Section.Browse) else reload()
+    }
+
+    fun cycleTrashDays() {
+        trashDays = when (trashDays) {
+            7 -> 30
+            30 -> 90
+            90 -> 0
+            else -> 7
+        }
+        prefs.edit().putInt("trash_days", trashDays).apply()
+        toast(if (trashDays == 0) "Papierkorb wird nicht automatisch geleert" else "Papierkorb wird nach $trashDays Tagen automatisch geleert")
+    }
+
+    fun openOther(f: OtherFilter, back: Section) {
+        otherFilter = f
+        otherBack = back
+        if (section == Section.Other) reload() else selectSection(Section.Other)
     }
 
     fun toggleView() {
@@ -487,6 +552,179 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     fun selectAll(paths: List<String>) { selected = paths.toSet() }
 
     fun clearSelection() { selected = emptySet() }
+
+    // ---------- Ähnliche Bilder ----------
+
+    fun startSimilarScan() {
+        val s = section
+        val list = items.filter { !it.isDir }
+        dupJob?.cancel()
+        dupJob = viewModelScope.launch {
+            dupStatus = "Vergleiche Bilder …"
+            showSimilar = true
+            try {
+                val res = Similar.scan(list) { st -> dupStatus = st }
+                simResults = simResults + (s to res)
+            } finally {
+                dupStatus = ""
+            }
+        }
+    }
+
+    // ---------- Tresor ----------
+
+    private fun hashPin(pin: String, salt: String): String =
+        MessageDigest.getInstance("SHA-256").digest((salt + pin).toByteArray())
+            .joinToString("") { b -> String.format("%02x", b) }
+
+    fun setVaultPin(pin: String) {
+        val salt = System.nanoTime().toString()
+        prefs.edit().putString("vault_salt", salt).putString("vault_hash", hashPin(pin, salt)).apply()
+        vaultHasPin = true
+        vaultUnlocked = true
+        reload()
+    }
+
+    fun unlockVault(pin: String): Boolean {
+        val salt = prefs.getString("vault_salt", "") ?: ""
+        val ok = hashPin(pin, salt) == prefs.getString("vault_hash", null)
+        if (ok) {
+            vaultUnlocked = true
+            reload()
+        }
+        return ok
+    }
+
+    fun unlockVaultBiometric() {
+        if (vaultHasPin) {
+            vaultUnlocked = true
+            reload()
+        }
+    }
+
+    fun lockVault() {
+        vaultUnlocked = false
+        if (section == Section.Vault) items = emptyList()
+    }
+
+    fun moveToVault(paths: List<String>) {
+        if (!vaultHasPin) {
+            toast("Richte zuerst den Tresor ein (Mehr → Tresor).")
+            return
+        }
+        launchOp {
+            val files = paths.map { File(it) }
+            val old = files.flatMap { Fs.collect(it) }.map { it.path }
+            val n = Vault.hideIn(roots, files)
+            Fs.scan(app, old)
+            "$n von ${files.size} in den Tresor verschoben"
+        }
+    }
+
+    fun bringOutOfVault(paths: List<String>) = launchOp {
+        val restored = ArrayList<String>()
+        val n = Vault.bringOut(roots, paths.toSet(), restored)
+        Fs.scan(app, restored)
+        "$n aus dem Tresor geholt"
+    }
+
+    // ---------- Cloud (über Android-Dokumentenzugriff) ----------
+
+    private fun saveCloud() {
+        val set = HashSet<String>()
+        for (r in cloudRoots) set.add(r.first + "\t" + r.second)
+        prefs.edit().putStringSet("cloud", set).apply()
+    }
+
+    fun addCloudRoot(uri: Uri) {
+        try {
+            app.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+        }
+        viewModelScope.launch {
+            val label = withContext(Dispatchers.IO) { CloudFs.rootName(app, uri) }
+            cloudRoots = cloudRoots.filter { it.first != uri.toString() } + Pair(uri.toString(), label)
+            saveCloud()
+        }
+    }
+
+    fun removeCloudRoot(entry: Pair<String, String>) {
+        try {
+            app.contentResolver.releasePersistableUriPermission(
+                Uri.parse(entry.first), Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+        }
+        cloudRoots = cloudRoots.filter { it.first != entry.first }
+        saveCloud()
+    }
+
+    fun openCloudRoot(entry: Pair<String, String>) {
+        val tree = Uri.parse(entry.first)
+        val doc = DocumentsContract.getTreeDocumentId(tree)
+        cloudPath = listOf(CloudNode(tree, doc, entry.second))
+        loadCloud()
+    }
+
+    fun openCloudDir(item: CloudItem) {
+        val cur = cloudPath.lastOrNull() ?: return
+        cloudPath = cloudPath + CloudNode(cur.tree, item.docId, item.name)
+        loadCloud()
+    }
+
+    fun cloudUp() {
+        cloudPath = cloudPath.dropLast(1)
+        if (cloudPath.isEmpty()) cloudItems = emptyList() else loadCloud()
+    }
+
+    fun loadCloud() {
+        val node = cloudPath.lastOrNull() ?: return
+        cloudBusy = true
+        viewModelScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                try { CloudFs.list(app, node.tree, node.docId) } catch (e: Exception) { emptyList<CloudItem>() }
+            }
+            cloudItems = res
+            cloudBusy = false
+        }
+    }
+
+    fun cloudDownload(item: CloudItem) {
+        val node = cloudPath.lastOrNull() ?: return
+        viewModelScope.launch {
+            cloudBusy = true
+            val f = withContext(Dispatchers.IO) { CloudFs.download(app, node.tree, item) }
+            cloudBusy = false
+            toast(if (f != null) "Geladen nach Download/Cloud" else "Download fehlgeschlagen")
+        }
+    }
+
+    fun cloudDelete(item: CloudItem) {
+        val node = cloudPath.lastOrNull() ?: return
+        viewModelScope.launch {
+            cloudBusy = true
+            val ok = withContext(Dispatchers.IO) { CloudFs.delete(app, node.tree, item) }
+            toast(if (ok) "In der Cloud gelöscht" else "Löschen nicht möglich")
+            loadCloud()
+        }
+    }
+
+    fun cloudUpload(uris: List<Uri>) {
+        val node = cloudPath.lastOrNull() ?: return
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            cloudBusy = true
+            val n = withContext(Dispatchers.IO) {
+                var ok = 0
+                for (u in uris) if (CloudFs.upload(app, node.tree, node.docId, u)) ok++
+                ok
+            }
+            toast("$n von ${uris.size} hochgeladen")
+            loadCloud()
+        }
+    }
 
     // ---------- Favoriten, Sperren, Sammlungen ----------
 
@@ -533,6 +771,19 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     // ---------- Operationen ----------
 
+    private fun prune(m: Map<Section, List<DupGroup>>): Map<Section, List<DupGroup>> {
+        val out = HashMap<Section, List<DupGroup>>()
+        for ((sec, gs) in m) {
+            val kept = ArrayList<DupGroup>()
+            for (g in gs) {
+                val alive = g.files.filter { File(it.path).exists() }
+                if (alive.size >= 2) kept.add(g.copy(files = alive))
+            }
+            out[sec] = kept
+        }
+        return out
+    }
+
     private fun launchOp(block: () -> String) {
         viewModelScope.launch {
             val msg = withContext(Dispatchers.IO) {
@@ -540,19 +791,11 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (msg.isNotEmpty()) Toast.makeText(app, msg, Toast.LENGTH_SHORT).show()
             selected = emptySet()
-            val current = dupResults
-            dupResults = withContext(Dispatchers.IO) {
-                val out = HashMap<Section, List<DupGroup>>()
-                for ((sec, gs) in current) {
-                    val kept = ArrayList<DupGroup>()
-                    for (g in gs) {
-                        val alive = g.files.filter { File(it.path).exists() }
-                        if (alive.size >= 2) kept.add(g.copy(files = alive))
-                    }
-                    out[sec] = kept
-                }
-                out
-            }
+            val cur1 = dupResults
+            val cur2 = simResults
+            val pruned = withContext(Dispatchers.IO) { Pair(prune(cur1), prune(cur2)) }
+            dupResults = pruned.first
+            simResults = pruned.second
             reload()
         }
     }
@@ -571,7 +814,10 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Löscht endgültig (im Papierkorb-Reiter aus dem Papierkorb, sonst direkt). */
     fun deleteForever(paths: List<String>) = launchOp {
-        if (section == Section.Trash) {
+        if (section == Section.Vault) {
+            val n = Vault.deleteForever(roots, paths.toSet())
+            "$n endgültig gelöscht"
+        } else if (section == Section.Trash) {
             val n = Trash.deleteForever(roots, paths.toSet())
             "$n endgültig gelöscht"
         } else {
@@ -636,6 +882,13 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun cancelClip() { clip = null }
+
+    /** Einzelne Pfade (z. B. ein Ordner) zum Verschieben/Kopieren vormerken und zum Dateien-Reiter wechseln. */
+    fun setClipPaths(paths: List<String>, move: Boolean) {
+        clip = Clip(paths, move)
+        selected = emptySet()
+        if (section != Section.Browse) selectSection(Section.Browse)
+    }
 
     private fun transfer(paths: List<String>, target: File, move: Boolean): String {
         var ok = 0

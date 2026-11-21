@@ -1,6 +1,8 @@
 package de.dateimanager.app
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -87,6 +89,7 @@ sealed interface Dlg {
 fun FileManagerApp(vm: FmViewModel = viewModel()) {
     val ctx = LocalContext.current
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.onResume() }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.lockVault() }
 
     val rows = vm.rows
     val entries = remember(rows) { rows.filterIsInstance<Row.Entry>().map { it.item } }
@@ -103,6 +106,12 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
+    val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) vm.addCloudRoot(uri)
+    }
+    val pickLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        vm.cloudUpload(uris)
+    }
 
     LaunchedEffect(vm.section, vm.dir, vm.albumDir, vm.subMode) {
         listState.scrollToItem(0)
@@ -150,6 +159,10 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                         DropdownMenuItem(text = { Text("Wiederherstellen") }, onClick = {
                                             vm.restore(selectedItems.map { it.path }); menu = false
                                         })
+                                    } else if (vm.section == Section.Vault) {
+                                        DropdownMenuItem(text = { Text("Aus Tresor holen") }, onClick = {
+                                            vm.bringOutOfVault(selectedItems.map { it.path }); menu = false
+                                        })
                                     } else {
                                         DropdownMenuItem(text = { Text("Kopieren") }, onClick = {
                                             vm.setClip(false); menu = false
@@ -169,6 +182,9 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                         val allLocked = selectedItems.all { it.path in vm.marks.locked }
                                         DropdownMenuItem(text = { Text(if (allLocked) "Entsperren" else "Sperren (vor Löschen schützen)") }, onClick = {
                                             vm.toggleLock(selectedItems.map { it.path }); menu = false
+                                        })
+                                        DropdownMenuItem(text = { Text("In Tresor verschieben") }, onClick = {
+                                            vm.moveToVault(selectedItems.map { it.path }); menu = false
                                         })
                                         DropdownMenuItem(text = { Text("Zu Sammlung hinzufügen …") }, onClick = {
                                             dialog = Dlg.AddToTag(selectedItems.map { it.path }); menu = false
@@ -222,13 +238,14 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                 vm.roots.firstOrNull { it.dir == d }?.name ?: d?.name ?: "Dateien"
                             }
                             ad != null -> when {
-                                ad == FmViewModel.INBOX -> "Nicht zugeordnet"
+                                ad == FmViewModel.INBOX -> "Ohne Album"
                                 ad.startsWith("tag:") -> ad.removePrefix("tag:")
                                 else -> File(ad).name
                             }
                             else -> vm.section.title
                         }
-                        val showTools = vm.section != Section.Storage && vm.section != Section.More && !dupMode
+                        val showTools = vm.section != Section.Storage && vm.section != Section.More && vm.section != Section.Cloud &&
+                            !(vm.section == Section.Vault && !vm.vaultUnlocked) && !dupMode
                         TopAppBar(
                             title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             navigationIcon = {
@@ -239,7 +256,9 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                 }
                             },
                             actions = {
-                                if (vm.section != Section.Storage && vm.section != Section.More) {
+                                if (vm.section != Section.Storage && vm.section != Section.More && vm.section != Section.Cloud &&
+                                    vm.section != Section.Search && !(vm.section == Section.Vault && !vm.vaultUnlocked)
+                                ) {
                                     IconButton(onClick = { vm.openSearch() }) { Icon(Icons.Default.Search, "Suchen") }
                                 }
                                 if (showTools) {
@@ -271,6 +290,19 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                         if (inTrash) {
                                             DropdownMenuItem(text = { Text("Papierkorb leeren") }, onClick = {
                                                 dialog = Dlg.EmptyTrash; more = false
+                                            })
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        if (vm.trashDays == 0) "Automatisch leeren: aus"
+                                                        else "Automatisch leeren nach ${vm.trashDays} Tagen"
+                                                    )
+                                                },
+                                                onClick = { vm.cycleTrashDays(); more = false }
+                                            )
+                                        } else if (vm.section == Section.Vault) {
+                                            DropdownMenuItem(text = { Text("Tresor sperren") }, onClick = {
+                                                vm.lockVault(); more = false
                                             })
                                         } else {
                                             DropdownMenuItem(
@@ -336,8 +368,24 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             if (vm.section == Section.Storage) {
                 StorageScreen(vm)
             } else if (vm.section == Section.More) {
-                MoreScreen { vm.selectSection(it) }
+                MoreScreen { sec, f -> if (f != null) vm.openOther(f, Section.More) else vm.selectSection(sec) }
+            } else if (vm.section == Section.Vault && !vm.vaultUnlocked) {
+                VaultGate(vm)
+            } else if (vm.section == Section.Cloud) {
+                CloudScreen(vm, { treeLauncher.launch(null) }, { pickLauncher.launch(arrayOf("*/*")) })
             } else {
+                if (vm.section == Section.Search) AdvancedSearchBar(vm)
+                if (vm.section == Section.Other) OtherChips(vm)
+                if (inTrash) {
+                    Text(
+                        if (vm.trashDays > 0) "Gelöschtes wird nach ${vm.trashDays} Tagen automatisch entfernt (beim Öffnen der App). Einstellen über ⋮."
+                        else "Automatisches Leeren ist aus. Einstellen über ⋮.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+                if (vm.section == Section.Cleanup) CleanupChips(vm)
                 if (dupMode) DupBar(vm)
                 if (rows.isEmpty()) {
                     if (!vm.loading && !dupMode) {
@@ -348,6 +396,9 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                     vm.section == Section.Collections -> "Noch keine Sammlungen. Markiere Dateien und wähle ⋮ → „Zu Sammlung hinzufügen“."
                                     vm.section == Section.Favorites -> "Noch keine Favoriten. Markiere Dateien oder Ordner und wähle ⋮ → „Zu Favoriten“."
                                     vm.section == Section.Locked -> "Keine gesperrten Dateien."
+                                    vm.section == Section.Vault -> "Der Tresor ist leer. Markiere Dateien und wähle ⋮ → „In Tresor verschieben“."
+                                    vm.section == Section.Cleanup -> "Nichts gefunden – hier ist alles sauber."
+                                    vm.section == Section.Search -> "Gib einen Namen ein oder wähle Filter."
                                     else -> "Keine Dateien"
                                 },
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -363,7 +414,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                     when (row) {
                                         is Row.Header -> GroupHeader(
                                             label = row.label,
-                                            selectable = row.paths.isNotEmpty(),
+                                            selectable = row.paths.isNotEmpty() && selMode,
                                             allSelected = row.paths.isNotEmpty() && vm.selected.containsAll(row.paths),
                                             pad = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
                                             onClick = { vm.toggleGroup(row.paths) }
@@ -375,6 +426,8 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                         )
                                         is Row.Album -> AlbumRow(
                                             info = row.info,
+                                            lock = vm.marks.isLocked(row.info.path),
+                                            fav = row.info.path in vm.marks.favorites,
                                             loader = loader,
                                             onClick = { vm.openAlbum(row.info.path) },
                                             onLongClick = {
@@ -426,7 +479,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                     when (row) {
                                         is Row.Header -> GroupHeader(
                                             label = row.label,
-                                            selectable = row.paths.isNotEmpty(),
+                                            selectable = row.paths.isNotEmpty() && selMode,
                                             allSelected = row.paths.isNotEmpty() && vm.selected.containsAll(row.paths),
                                             pad = PaddingValues(start = 6.dp, end = 6.dp, top = 12.dp, bottom = 2.dp),
                                             onClick = { vm.toggleGroup(row.paths) }
@@ -438,6 +491,8 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                         )
                                         is Row.Album -> AlbumTile(
                                             info = row.info,
+                                            lock = vm.marks.isLocked(row.info.path),
+                                            fav = row.info.path in vm.marks.favorites,
                                             loader = loader,
                                             onClick = { vm.openAlbum(row.info.path) },
                                             onLongClick = {
@@ -482,21 +537,27 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
         }
         is Dlg.Delete -> DeleteDialog(
             items = d.items,
-            inTrash = inTrash,
+            inTrash = inTrash || vm.section == Section.Vault,
             onTrash = { vm.trash(d.items.map { it.path }); dialog = null },
             onForever = { vm.deleteForever(d.items.map { it.path }); dialog = null },
             onDismiss = { dialog = null },
-            lockedCount = d.items.count { vm.marks.isProtected(it.path) }
+            lockedCount = d.items.count { vm.marks.isProtected(it.path) },
+            trashDays = vm.trashDays
         )
         is Dlg.AlbumOptions -> AlbumOptionsDialog(
             info = d.info,
+            locked = vm.marks.isLocked(d.info.path),
+            favorite = d.info.path in vm.marks.favorites,
             onDismiss = { dialog = null },
             onOpen = { vm.openAlbum(d.info.path); dialog = null },
-            onToggleInbox = { vm.markAlbum(d.info.path, !d.info.inbox); dialog = null },
-            onShowInFiles = { vm.showInFiles(d.info.path); dialog = null },
             onRename = {
-                dialog = Dlg.Rename(FileItem(d.info.path, d.info.name, true, 0L, 0L))
-            }
+                dialog = Dlg.Rename(FileItem(d.info.path, File(d.info.path).name, true, 0L, 0L))
+            },
+            onMove = { vm.setClipPaths(listOf(d.info.path), true); dialog = null },
+            onToggleLock = { vm.toggleLock(listOf(d.info.path)); dialog = null },
+            onToggleFav = { vm.toggleFavorites(listOf(d.info.path)); dialog = null },
+            onToggleInbox = { vm.markAlbum(d.info.path, !d.info.inbox); dialog = null },
+            onShowInFiles = { vm.showInFiles(d.info.path); dialog = null }
         )
         is Dlg.MoveToAlbum -> AlbumPickerDialog(
             albums = vm.albumInfos.filter { !it.inbox },

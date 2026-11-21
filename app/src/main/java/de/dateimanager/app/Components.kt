@@ -1,6 +1,8 @@
 package de.dateimanager.app
 
+import android.app.Activity
 import android.graphics.Bitmap
+import android.os.Build
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -38,6 +40,11 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
@@ -53,8 +60,14 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Videocam
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -76,6 +89,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -90,6 +104,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -119,20 +136,21 @@ fun GroupHeader(
         Modifier.fillMaxWidth().then(clickMod).padding(pad),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (selectable) {
+            Icon(
+                if (allSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                "Alle dieses Abschnitts markieren",
+                tint = if (allSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(Modifier.size(12.dp))
+        }
         Text(
             label,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.weight(1f)
         )
-        if (selectable) {
-            Icon(
-                if (allSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
-                "Alle dieses Tages markieren",
-                tint = if (allSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp)
-            )
-        }
     }
 }
 
@@ -169,25 +187,34 @@ fun FastScroller(
         var dragging by remember { mutableStateOf(false) }
         var dragFraction by remember { mutableStateOf(0f) }
         val range = (total - visible).coerceAtLeast(1)
+        val rangeNow by rememberUpdatedState(range)
+        val trackNow by rememberUpdatedState(trackPx)
+        val scrollNow by rememberUpdatedState(onScrollTo)
+        val lastIndex = remember { IntArray(1) { -1 } }
         val frac = if (dragging) dragFraction else (firstVisible.toFloat() / range).coerceIn(0f, 1f)
         val alpha by animateFloatAsState(if (dragging || scrolling) 1f else 0.35f, label = "thumbAlpha")
 
-        fun fractionFor(y: Float): Float = ((y - thumbPx / 2) / (trackPx - thumbPx)).coerceIn(0f, 1f)
-
         Box(
-            Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(24.dp).pointerInput(total, visible, trackPx) {
+            Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(24.dp).pointerInput(Unit) {
+                fun go(y: Float) {
+                    dragFraction = ((y - thumbPx / 2) / (trackNow - thumbPx)).coerceIn(0f, 1f)
+                    val idx = (dragFraction * rangeNow).roundToInt()
+                    if (idx != lastIndex[0]) {
+                        lastIndex[0] = idx
+                        scrollNow(idx)
+                    }
+                }
                 detectDragGestures(
                     onDragStart = { o ->
                         dragging = true
-                        dragFraction = fractionFor(o.y)
-                        onScrollTo((dragFraction * range).roundToInt())
+                        lastIndex[0] = -1
+                        go(o.y)
                     },
                     onDragEnd = { dragging = false },
                     onDragCancel = { dragging = false },
                     onDrag = { change, _ ->
                         change.consume()
-                        dragFraction = fractionFor(change.position.y)
-                        onScrollTo((dragFraction * range).roundToInt())
+                        go(change.position.y)
                     }
                 )
             }
@@ -282,7 +309,8 @@ fun DeleteDialog(
     onTrash: () -> Unit,
     onForever: () -> Unit,
     onDismiss: () -> Unit,
-    lockedCount: Int = 0
+    lockedCount: Int = 0,
+    trashDays: Int = 30
 ) {
     val what = if (items.size == 1) "„${items[0].name}“" else "${items.size} Elemente"
     AlertDialog(
@@ -292,7 +320,8 @@ fun DeleteDialog(
             Column {
                 Text(
                     if (inTrash) "$what endgültig löschen? Das lässt sich nicht rückgängig machen."
-                    else "$what in den Papierkorb verschieben? Dort bleibt es 30 Tage wiederherstellbar."
+                    else if (trashDays > 0) "$what in den Papierkorb verschieben? Dort bleibt es $trashDays Tage wiederherstellbar."
+                    else "$what in den Papierkorb verschieben? Dort bleibt es, bis du den Papierkorb leerst."
                 )
                 if (lockedCount > 0) {
                     Text(
@@ -329,23 +358,45 @@ fun ConfirmDialog(title: String, text: String, confirm: String, onOk: () -> Unit
 @Composable
 fun AlbumOptionsDialog(
     info: AlbumInfo,
+    locked: Boolean,
+    favorite: Boolean,
     onDismiss: () -> Unit,
     onOpen: () -> Unit,
+    onRename: () -> Unit,
+    onMove: () -> Unit,
+    onToggleLock: () -> Unit,
+    onToggleFav: () -> Unit,
     onToggleInbox: () -> Unit,
-    onShowInFiles: () -> Unit,
-    onRename: () -> Unit
+    onShowInFiles: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(info.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 TextButton(onClick = onOpen) { Text("Öffnen") }
-                TextButton(onClick = onToggleInbox) {
-                    Text(if (info.inbox) "Als Album markieren (sortiert)" else "Als Eingang markieren (nicht zugeordnet)")
-                }
-                TextButton(onClick = onShowInFiles) { Text("Im Reiter „Dateien“ zeigen") }
                 TextButton(onClick = onRename) { Text("Ordner umbenennen") }
+                TextButton(onClick = onMove) { Text("Ordner verschieben …") }
+                TextButton(onClick = onToggleLock) {
+                    Text(if (locked) "Ordner entsperren" else "Ordner sperren (alles darin vor Löschen schützen)")
+                }
+                TextButton(onClick = onToggleFav) { Text(if (favorite) "Aus Favoriten entfernen" else "Zu Favoriten") }
+                TextButton(onClick = onShowInFiles) { Text("Ordner im Reiter „Dateien“ ansehen") }
+                TextButton(onClick = onToggleInbox) {
+                    Text(if (info.inbox) "Als Album behandeln" else "Zu „Ohne Album“ zählen")
+                }
+                Text(
+                    if (info.inbox) {
+                        "Dieser Ordner zählt als „Ohne Album“ (typisch: Kamera, Screenshots, Downloads, WhatsApp). " +
+                            "Als Album behandelt erscheint er unter „Deine Alben“."
+                    } else {
+                        "Dieser Ordner ist ein Album. Mit „Zu Ohne Album zählen“ landet er stattdessen bei den " +
+                            "Dateien, die du noch einsortieren willst."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } }
@@ -501,6 +552,15 @@ fun PathBar(vm: FmViewModel) {
                 }
             }
         }
+        if (vm.showHidden) {
+            Row(Modifier.padding(horizontal = 12.dp)) {
+                FilterChip(
+                    selected = true,
+                    onClick = { vm.toggleHidden() },
+                    label = { Text("Versteckte Dateien sichtbar  ✕") }
+                )
+            }
+        }
         val d = vm.dir
         if (d != null && active != null) {
             val crumbs = remember(d, active) {
@@ -550,8 +610,17 @@ fun SubModeChips(vm: FmViewModel) {
 
 @Composable
 fun DupBar(vm: FmViewModel) {
-    val groups = vm.dupResults[vm.section]
+    val images = vm.section == Section.Images
+    val simMode = images && vm.showSimilar
+    val groups = (if (simMode) vm.simResults else vm.dupResults)[vm.section]
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        if (images) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !vm.showSimilar, onClick = { vm.showSimilar = false }, label = { Text("Identisch") })
+                FilterChip(selected = vm.showSimilar, onClick = { vm.showSimilar = true }, label = { Text("Ähnlich") })
+            }
+            Spacer(Modifier.height(8.dp))
+        }
         if (vm.dupStatus.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -561,14 +630,19 @@ fun DupBar(vm: FmViewModel) {
             }
         } else {
             Text(
-                vm.dupSummary(),
+                if (simMode && groups == null) "Findet Bilder, die gleich aussehen, auch bei anderer Größe oder Qualität."
+                else vm.dupSummary(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.startDupScan() }) {
-                    Text(if (groups == null) "Duplikate suchen" else "Neu suchen")
+                Button(onClick = { if (simMode) vm.startSimilarScan() else vm.startDupScan() }) {
+                    Text(
+                        if (groups != null) "Neu suchen"
+                        else if (simMode) "Ähnliche Bilder suchen"
+                        else "Duplikate suchen"
+                    )
                 }
                 if (!groups.isNullOrEmpty()) {
                     OutlinedButton(onClick = { vm.selectAllDupRest() }) { Text("Überflüssige markieren") }
@@ -589,7 +663,11 @@ fun StorageScreen(vm: FmViewModel) {
         if (vm.storage.isEmpty() && !vm.loading) {
             Text("Keine Speicherdaten verfügbar.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        vm.storage.forEach { v -> VolumeCard(v) { vm.selectSection(it) } }
+        vm.storage.forEach { v ->
+            VolumeCard(v) { sec, f ->
+                if (f != null) vm.openOther(f, Section.Storage) else vm.selectSection(sec)
+            }
+        }
         TextButton(onClick = { vm.selectSection(Section.Trash) }) { Text("Papierkorb öffnen") }
     }
 }
@@ -601,16 +679,22 @@ private fun pct(part: Long, total: Long): String {
 }
 
 @Composable
-fun VolumeCard(v: VolumeStats, onOpen: (Section) -> Unit) {
+fun VolumeCard(v: VolumeStats, onOpen: (Section, OtherFilter?) -> Unit) {
     val segs = listOf(
         Triple("Bilder", Color(0xFF43A047), v.images),
         Triple("Videos", Color(0xFF8E24AA), v.videos),
         Triple("Musik", Color(0xFFE53935), v.music),
         Triple("Aufnahmen", Color(0xFF00897B), v.recordings),
         Triple("Dokumente", Color(0xFF1E88E5), v.docs),
+        Triple("Apps & Archive", Color(0xFF6D4C41), v.apps),
+        Triple("Backups & Datenbanken", Color(0xFFFB8C00), v.backups),
         Triple("Sonstiges", Color(0xFF757575), v.other)
     )
-    val targets = listOf(Section.Images, Section.Videos, Section.Music, Section.Recordings, Section.Docs, Section.Other)
+    val targets = listOf<Pair<Section, OtherFilter?>>(
+        Pair(Section.Images, null), Pair(Section.Videos, null), Pair(Section.Music, null),
+        Pair(Section.Recordings, null), Pair(Section.Docs, null), Pair(Section.Archives, null),
+        Pair(Section.Other, OtherFilter.Backups), Pair(Section.Other, OtherFilter.All)
+    )
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text(v.name, style = MaterialTheme.typography.titleMedium)
@@ -633,7 +717,7 @@ fun VolumeCard(v: VolumeStats, onOpen: (Section) -> Unit) {
             Spacer(Modifier.height(8.dp))
             segs.forEachIndexed { i, (label, color, bytes) ->
                 Row(
-                    Modifier.fillMaxWidth().clickable { onOpen(targets[i]) }.padding(vertical = 10.dp),
+                    Modifier.fillMaxWidth().clickable { onOpen(targets[i].first, targets[i].second) }.padding(vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(Modifier.size(12.dp).background(color, CircleShape))
@@ -649,7 +733,7 @@ fun VolumeCard(v: VolumeStats, onOpen: (Section) -> Unit) {
                 }
             }
             Text(
-                "„Sonstiges“ enthält auch Apps und Systemdaten, die Android nicht einzeln anzeigt.",
+                "„Sonstiges“ enthält Systemdaten und App-Daten, die Android nicht einzeln anzeigt, sowie Bilder und Videos ohne Galerie-Eintrag. Tippe darauf, um die sichtbaren Dateien zu sortieren.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -857,7 +941,14 @@ fun CoverImage(path: String, loader: ImageLoader, modifier: Modifier) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AlbumRow(info: AlbumInfo, loader: ImageLoader, onClick: () -> Unit, onLongClick: () -> Unit) {
+fun AlbumRow(
+    info: AlbumInfo,
+    loader: ImageLoader,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    lock: Boolean = false,
+    fav: Boolean = false
+) {
     Row(
         Modifier.fillMaxWidth()
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
@@ -872,12 +963,16 @@ fun AlbumRow(info: AlbumInfo, loader: ImageLoader, onClick: () -> Unit, onLongCl
         }
         Spacer(Modifier.size(16.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                Fs.middleEllipsis(info.name, 40),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyLarge
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    Fs.middleEllipsis(info.name, 40),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                BadgeIcons(false, lock, fav, false, Modifier.padding(start = 6.dp))
+            }
             Text(
                 "${info.count} Dateien · ${Fs.formatSize(info.size)}",
                 style = MaterialTheme.typography.bodySmall,
@@ -889,7 +984,14 @@ fun AlbumRow(info: AlbumInfo, loader: ImageLoader, onClick: () -> Unit, onLongCl
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AlbumTile(info: AlbumInfo, loader: ImageLoader, onClick: () -> Unit, onLongClick: () -> Unit) {
+fun AlbumTile(
+    info: AlbumInfo,
+    loader: ImageLoader,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    lock: Boolean = false,
+    fav: Boolean = false
+) {
     Column(
         Modifier.clip(RoundedCornerShape(10.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
@@ -901,6 +1003,7 @@ fun AlbumTile(info: AlbumInfo, loader: ImageLoader, onClick: () -> Unit, onLongC
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
             CoverImage(info.cover, loader, Modifier.fillMaxSize())
+            BadgeIcons(false, lock, fav, true, Modifier.align(Alignment.TopEnd).padding(4.dp))
             Text(
                 "${info.count}",
                 style = MaterialTheme.typography.labelSmall,
@@ -976,24 +1079,37 @@ fun DocFilterChips(vm: FmViewModel) {
 
 // ---------- Mehr: weitere Kategorien ----------
 
-private data class MoreEntry(val icon: ImageVector, val title: String, val desc: String, val section: Section)
+private data class MoreEntry(
+    val icon: ImageVector,
+    val title: String,
+    val desc: String,
+    val section: Section,
+    val filter: OtherFilter? = null
+)
 
 @Composable
-fun MoreScreen(onOpen: (Section) -> Unit) {
+fun MoreScreen(onOpen: (Section, OtherFilter?) -> Unit) {
     val list = listOf(
         MoreEntry(Icons.Default.Download, "Downloads", "Alles aus dem Download-Ordner", Section.Downloads),
         MoreEntry(Icons.Default.Smartphone, "Screenshots & Bildschirmaufnahmen", "Getrennt von deinen Fotos", Section.Screenshots),
         MoreEntry(Icons.Default.FolderZip, "Archive & Apps", "zip, rar, 7z, apk …", Section.Archives),
         MoreEntry(Icons.Default.ChatBubble, "Messenger-Medien", "WhatsApp, Telegram & Co. nach Ordnern", Section.Messenger),
+        MoreEntry(Icons.Default.Mic, "Aufnahmen & Sprachnachrichten", "Getrennt von der Musik", Section.Recordings),
+        MoreEntry(Icons.Default.Storage, "Backups & Datenbanken", "z. B. WhatsApp-Backups (crypt), db-Dateien", Section.Other, OtherFilter.Backups),
+        MoreEntry(Icons.Default.DateRange, "Kalender & Kontakte", "ics- und vcf-Dateien", Section.Other, OtherFilter.Calendar),
         MoreEntry(Icons.Default.Storage, "Größte Dateien", "Die größten Platzfresser zuerst", Section.Largest),
         MoreEntry(Icons.Default.Bookmark, "Sammlungen", "Eigene Gruppen, ohne Dateien zu verschieben", Section.Collections),
         MoreEntry(Icons.Default.Lock, "Gesperrte Dateien", "Vor dem Löschen geschützt", Section.Locked),
-        MoreEntry(Icons.Default.Delete, "Papierkorb", "30 Tage wiederherstellbar", Section.Trash)
+        MoreEntry(Icons.Default.Security, "Tresor", "Versteckter Bereich mit PIN oder Fingerabdruck", Section.Vault),
+        MoreEntry(Icons.Default.Cloud, "Cloud", "OneDrive, Google Drive, Dropbox", Section.Cloud),
+        MoreEntry(Icons.Default.Settings, "Aufräumen", "Leere Ordner, Temp-Reste, alte Screenshots", Section.Cleanup),
+        MoreEntry(Icons.Default.Search, "Erweiterte Suche", "Name, Typ, Größe und Alter kombinieren", Section.Search),
+        MoreEntry(Icons.Default.Delete, "Papierkorb", "Gelöschtes bleibt wiederherstellbar", Section.Trash)
     )
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         list.forEach { e ->
             Row(
-                Modifier.fillMaxWidth().clickable { onOpen(e.section) }.padding(horizontal = 16.dp, vertical = 14.dp),
+                Modifier.fillMaxWidth().clickable { onOpen(e.section, e.filter) }.padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(e.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
@@ -1007,6 +1123,188 @@ fun MoreScreen(onOpen: (Section) -> Unit) {
                     )
                 }
             }
+        }
+    }
+}
+
+// ---------- Aufräumen & erweiterte Suche ----------
+
+@Composable
+fun CleanupChips(vm: FmViewModel) {
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        CleanupFilter.values().forEach { f ->
+            FilterChip(
+                selected = vm.cleanupFilter == f,
+                onClick = { vm.cleanupFilter = f; vm.reload() },
+                label = { Text(f.label) }
+            )
+        }
+    }
+}
+
+@Composable
+fun AdvDropdown(current: String, options: List<String>, onPick: (Int) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        FilterChip(selected = false, onClick = { open = true }, label = { Text(current) })
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEachIndexed { i, o ->
+                DropdownMenuItem(text = { Text(o) }, onClick = { onPick(i); open = false })
+            }
+        }
+    }
+}
+
+@Composable
+fun AdvancedSearchBar(vm: FmViewModel) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        OutlinedTextField(
+            value = vm.advQuery,
+            onValueChange = { vm.advQuery = it; vm.reload() },
+            singleLine = true,
+            label = { Text("Dateiname enthält …") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AdvDropdown(vm.advType.label, AdvType.values().map { it.label }) { i ->
+                vm.advType = AdvType.values()[i]; vm.reload()
+            }
+            AdvDropdown(vm.advSize.label, AdvSize.values().map { it.label }) { i ->
+                vm.advSize = AdvSize.values()[i]; vm.reload()
+            }
+            AdvDropdown(vm.advAge.label, AdvAge.values().map { it.label }) { i ->
+                vm.advAge = AdvAge.values()[i]; vm.reload()
+            }
+        }
+    }
+}
+
+// ---------- Tresor ----------
+
+@Composable
+fun VaultGate(vm: FmViewModel) {
+    val ctx = LocalContext.current
+    var pin by remember { mutableStateOf("") }
+    var pin2 by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+    var resetOk by remember { mutableStateOf(false) }
+    var forgot by remember { mutableStateOf(false) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        if (r.resultCode == Activity.RESULT_OK) {
+            resetOk = true
+            error = ""
+        } else {
+            error = "Bestätigung abgebrochen."
+        }
+    }
+    val setupMode = !vm.vaultHasPin || resetOk
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(Icons.Default.Security, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(56.dp))
+        Text(
+            if (resetOk) "Neue PIN setzen" else if (setupMode) "Tresor einrichten" else "Tresor entsperren",
+            style = MaterialTheme.typography.headlineSmall
+        )
+        Text(
+            "Der Tresor versteckt Dateien in einem unsichtbaren Ordner. Er ist nicht verschlüsselt.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        OutlinedTextField(
+            value = pin,
+            onValueChange = { v -> pin = v.filter { c -> c.isDigit() }.take(12) },
+            label = { Text("PIN (mindestens 4 Ziffern)") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+        )
+        if (setupMode) {
+            OutlinedTextField(
+                value = pin2,
+                onValueChange = { v -> pin2 = v.filter { c -> c.isDigit() }.take(12) },
+                label = { Text("PIN wiederholen") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+            )
+        }
+        if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
+        Button(onClick = {
+            if (setupMode) {
+                if (pin.length < 4) {
+                    error = "Mindestens 4 Ziffern."
+                } else if (pin != pin2) {
+                    error = "Die PINs sind nicht gleich."
+                } else {
+                    vm.setVaultPin(pin)
+                    resetOk = false
+                    pin = ""
+                    pin2 = ""
+                    error = ""
+                }
+            } else if (vm.unlockVault(pin)) {
+                pin = ""
+                error = ""
+            } else {
+                error = "Falsche PIN."
+            }
+        }) { Text(if (setupMode) "PIN speichern" else "Entsperren") }
+        if (!setupMode) {
+            val act = Auth.activityOf(ctx)
+            if (act != null && Auth.biometricAvailable(ctx) && Build.VERSION.SDK_INT >= 28) {
+                OutlinedButton(onClick = {
+                    Auth.biometric(act, "Tresor entsperren", { vm.unlockVaultBiometric() }, { })
+                }) { Text("Mit Fingerabdruck entsperren") }
+            }
+            TextButton(onClick = { forgot = true }) { Text("PIN vergessen?") }
+        }
+    }
+
+    if (forgot) {
+        AlertDialog(
+            onDismissRequest = { forgot = false },
+            title = { Text("PIN vergessen") },
+            text = {
+                Text(
+                    "Du kannst eine neue PIN setzen, wenn du dich mit der Sperre deines Handys bestätigst " +
+                        "(PIN, Muster, Passwort oder Fingerabdruck). Deine Dateien bleiben erhalten. " +
+                        "Sie liegen im versteckten Ordner „.DM_Tresor“ deines Speichers und sind auch über " +
+                        "„Versteckte Dateien anzeigen“ im Reiter „Dateien“ erreichbar."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    forgot = false
+                    val i = Auth.deviceCredentialIntent(ctx)
+                    if (i != null) {
+                        launcher.launch(i)
+                    } else {
+                        error = "Dein Handy hat keine Bildschirmsperre. Nutze den Ordner „.DM_Tresor“ im Reiter „Dateien“."
+                    }
+                }) { Text("Mit Handy-Sperre bestätigen") }
+            },
+            dismissButton = { TextButton(onClick = { forgot = false }) { Text("Abbrechen") } }
+        )
+    }
+}
+
+@Composable
+fun OtherChips(vm: FmViewModel) {
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OtherFilter.values().forEach { f ->
+            FilterChip(selected = vm.otherFilter == f, onClick = { vm.otherFilter = f }, label = { Text(f.label) })
         }
     }
 }

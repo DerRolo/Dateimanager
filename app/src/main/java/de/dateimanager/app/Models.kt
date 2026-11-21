@@ -4,13 +4,14 @@ import java.io.File
 
 enum class Section(val title: String, val inTabs: Boolean = true) {
     Browse("Dateien"), Recent("Kürzlich"), Favorites("Favoriten"), Docs("Dokumente"),
-    Music("Musik"), Recordings("Aufnahmen"), Images("Bilder"), Videos("Videos"),
+    Music("Musik"), Recordings("Aufnahmen", false), Images("Bilder"), Videos("Videos"),
     More("Mehr"), Storage("Speicher"),
     Other("Sonstiges", false), Trash("Papierkorb", false),
     Downloads("Downloads", false), Screenshots("Screenshots", false),
     Archives("Archive & Apps", false), Messenger("Messenger", false),
     Largest("Größte Dateien", false), Collections("Sammlungen", false),
-    Locked("Gesperrt", false)
+    Locked("Gesperrt", false), Vault("Tresor", false), Cloud("Cloud", false),
+    Cleanup("Aufräumen", false), Search("Erweiterte Suche", false)
 }
 
 enum class SortBy(val label: String) { Name("Name"), Date("Datum"), Size("Größe"), Duration("Länge") }
@@ -56,7 +57,25 @@ data class AlbumInfo(
     val inbox: Boolean
 )
 
-data class DupGroup(val size: Long, val files: List<FileItem>, val verified: Boolean)
+data class DupGroup(val size: Long, val files: List<FileItem>, val verified: Boolean, val similar: Boolean = false)
+
+enum class CleanupFilter(val label: String) {
+    EmptyFolders("Leere Ordner"), ZeroByte("0-Byte-Dateien"), Temp("Temp-Reste"),
+    OldShots("Alte Screenshots"), Stale("Lange nicht geändert")
+}
+
+enum class AdvType(val label: String) {
+    All("Alle Typen"), Images("Bilder"), Videos("Videos"), Audio("Audio"), Docs("Dokumente"), Archives("Archive")
+}
+
+enum class AdvSize(val label: String, val mb: Long) {
+    Any("Beliebige Größe", 0L), Mb10("> 10 MB", 10L), Mb100("> 100 MB", 100L), Gb1("> 1 GB", 1024L)
+}
+
+enum class AdvAge(val label: String, val days: Int) {
+    Any("Beliebiges Alter", 0), Week("Letzte 7 Tage", 7), Month("Letzte 30 Tage", 30),
+    Year("Letztes Jahr", 365), Old("Älter als 1 Jahr", -365)
+}
 
 data class VolumeStats(
     val name: String,
@@ -66,10 +85,43 @@ data class VolumeStats(
     val videos: Long,
     val music: Long,
     val recordings: Long,
-    val docs: Long
+    val docs: Long,
+    val apps: Long,
+    val backups: Long
 ) {
     val used: Long get() = (total - free).coerceAtLeast(0L)
-    val other: Long get() = (used - images - videos - music - recordings - docs).coerceAtLeast(0L)
+    val other: Long get() = (used - images - videos - music - recordings - docs - apps - backups).coerceAtLeast(0L)
+}
+
+enum class OtherFilter(val label: String) {
+    All("Alle"), Media("Bilder & Videos ohne Galerie"), Apps("Apps & Archive"),
+    Backups("Backups & Datenbanken"), Calendar("Kalender & Kontakte"), Rest("Sonstige");
+
+    fun matches(item: FileItem): Boolean = this == All || classifyPath(item.path) == this
+
+    companion object {
+        private val MEDIA = setOf(
+            "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif", "mp4", "mkv", "webm", "3gp", "mov", "m4v",
+            "mp3", "m4a", "aac", "wav", "ogg", "opus", "flac", "amr"
+        )
+        private val APPS = setOf(
+            "apk", "xapk", "apks", "aab", "apkg", "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "iso"
+        )
+        private val BACKUP = setOf("db", "sqlite", "sqlite3", "bak", "backup", "journal", "wal", "shm", "dump")
+
+        fun classifyPath(path: String): OtherFilter {
+            val e = path.substringAfterLast('.', "").lowercase()
+            val p = path.lowercase()
+            return when {
+                e == "ics" || e == "vcf" -> Calendar
+                e.startsWith("crypt") || e in BACKUP || p.contains("msgstore") ||
+                    p.contains("/databases/") || p.contains("/backups/") -> Backups
+                e in APPS -> Apps
+                e in MEDIA -> Media
+                else -> Rest
+            }
+        }
+    }
 }
 
 enum class Kind { Folder, Image, Video, Audio, Pdf, Archive, Apk, Text, Other }
