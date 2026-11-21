@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.MediaScannerConnection
 import android.os.Environment
+import android.os.StatFs
 import android.provider.MediaStore
 import android.provider.MediaStore.Files.FileColumns
 import android.webkit.MimeTypeMap
@@ -20,6 +21,8 @@ object Fs {
 
     private val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
 
+    val DOC_EXTS = listOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "txt", "epub")
+
     fun roots(ctx: Context): List<Root> {
         val primary = Environment.getExternalStorageDirectory()
         val list = mutableListOf(Root("Interner Speicher", primary))
@@ -35,6 +38,16 @@ object Fs {
         }
         return list
     }
+
+    fun defaultAlbumBase(section: Section): File = File(
+        Environment.getExternalStorageDirectory(),
+        when (section) {
+            Section.Images -> "Pictures"
+            Section.Videos -> "Movies"
+            Section.Music -> "Music"
+            else -> "Documents"
+        }
+    )
 
     fun itemOf(f: File) = FileItem(
         f.absolutePath, f.name, f.isDirectory,
@@ -60,13 +73,15 @@ object Fs {
         return out
     }
 
-    /** Dokumente, Musik, Bilder, Videos und Kürzlich über die Medien-Datenbank (schnell). */
+    /** Dokumente, Musik, Bilder, Videos, Sonstiges und Kürzlich über die Medien-Datenbank (schnell). */
     fun media(ctx: Context, section: Section): List<FileItem> {
         val (sel, args) = when (section) {
-            Section.Docs -> "${FileColumns.MIME_TYPE}=?" to arrayOf("application/pdf")
+            Section.Docs -> DOC_EXTS.joinToString(" OR ", "(", ")") { "${FileColumns.DATA} LIKE ?" } to
+                DOC_EXTS.map { "%.$it" }.toTypedArray()
             Section.Music -> "${FileColumns.MEDIA_TYPE}=?" to arrayOf(FileColumns.MEDIA_TYPE_AUDIO.toString())
             Section.Images -> "${FileColumns.MEDIA_TYPE}=?" to arrayOf(FileColumns.MEDIA_TYPE_IMAGE.toString())
             Section.Videos -> "${FileColumns.MEDIA_TYPE}=?" to arrayOf(FileColumns.MEDIA_TYPE_VIDEO.toString())
+            Section.Other -> "${FileColumns.MEDIA_TYPE} NOT IN (1,2,3)" to emptyArray<String>()
             Section.Recent -> {
                 val cutoff = (System.currentTimeMillis() / 1000 - 30L * 86400).toString()
                 "${FileColumns.DATE_MODIFIED}>=? OR ${FileColumns.DATE_ADDED}>=?" to arrayOf(cutoff, cutoff)
@@ -93,6 +108,7 @@ object Fs {
                 if (p.contains("/.") || p.contains("/Android/data/")) continue
                 val f = File(p)
                 if (!f.isFile || !seen.add(p)) continue
+                if (section == Section.Other && f.extension.lowercase() in DOC_EXTS) continue
                 val mod = if (section == Section.Recent) maxOf(f.lastModified(), c.getLong(iAdded) * 1000) else f.lastModified()
                 out += FileItem(p, f.name, false, f.length(), mod, if (iDur >= 0) c.getLong(iDur) else 0L)
             }
@@ -100,6 +116,43 @@ object Fs {
         if (section == Section.Recent) {
             out.sortByDescending { it.modified }
             return out.take(1500)
+        }
+        return out
+    }
+
+    /** Belegung pro Speicher, aufgeteilt nach Bildern, Videos, Musik, Dokumenten. */
+    fun storageStats(ctx: Context, roots: List<Root>): List<VolumeStats> {
+        val n = roots.size
+        val img = LongArray(n)
+        val vid = LongArray(n)
+        val mus = LongArray(n)
+        val doc = LongArray(n)
+        val uri = MediaStore.Files.getContentUri("external")
+        val proj = arrayOf(FileColumns.DATA, FileColumns.SIZE, FileColumns.MEDIA_TYPE)
+        ctx.contentResolver.query(uri, proj, null, null, null)?.use { c ->
+            val iD = c.getColumnIndexOrThrow(FileColumns.DATA)
+            val iS = c.getColumnIndexOrThrow(FileColumns.SIZE)
+            val iT = c.getColumnIndexOrThrow(FileColumns.MEDIA_TYPE)
+            while (c.moveToNext()) {
+                val p = c.getString(iD) ?: continue
+                val size = c.getLong(iS)
+                if (size <= 0L) continue
+                val vi = roots.indexOfFirst { p.startsWith(it.dir.path + "/") }
+                if (vi < 0) continue
+                val type = c.getInt(iT)
+                if (type == FileColumns.MEDIA_TYPE_IMAGE) img[vi] += size
+                else if (type == FileColumns.MEDIA_TYPE_VIDEO) vid[vi] += size
+                else if (type == FileColumns.MEDIA_TYPE_AUDIO) mus[vi] += size
+                else if (p.substringAfterLast('.', "").lowercase() in DOC_EXTS) doc[vi] += size
+            }
+        }
+        val out = ArrayList<VolumeStats>()
+        roots.forEachIndexed { i, r ->
+            try {
+                val st = StatFs(r.dir.path)
+                out.add(VolumeStats(r.name, st.totalBytes, st.availableBytes, img[i], vid[i], mus[i], doc[i]))
+            } catch (e: Exception) {
+            }
         }
         return out
     }
