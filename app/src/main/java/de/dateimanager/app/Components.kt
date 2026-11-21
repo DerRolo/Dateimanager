@@ -467,7 +467,7 @@ fun SubModeChips(vm: FmViewModel) {
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         SubMode.values().forEach { m ->
-            FilterChip(selected = vm.subMode == m, onClick = { vm.setSubMode(m) }, label = { Text(m.label) })
+            FilterChip(selected = vm.subMode == m, onClick = { vm.chooseSubMode(m) }, label = { Text(m.label) })
         }
     }
 }

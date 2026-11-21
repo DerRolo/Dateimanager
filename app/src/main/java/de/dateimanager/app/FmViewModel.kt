@@ -314,7 +314,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     // ---------- Untermodi: Alle / Alben / Duplikate ----------
 
-    fun setSubMode(m: SubMode) {
+    fun chooseSubMode(m: SubMode) {
         subMode = m
         albumDir = null
         selected = emptySet()
