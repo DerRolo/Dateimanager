@@ -7,7 +7,9 @@ enum class Section(val title: String) {
     Music("Musik"), Images("Bilder"), Videos("Videos")
 }
 
-enum class SortBy(val label: String) { Name("Name"), Date("Datum"), Size("Größe") }
+enum class SortBy(val label: String) { Name("Name"), Date("Datum"), Size("Größe"), Duration("Länge") }
+
+enum class ViewMode { List, Grid }
 
 data class Root(val name: String, val dir: File)
 
@@ -18,7 +20,8 @@ data class FileItem(
     val name: String,
     val isDir: Boolean,
     val size: Long,
-    val modified: Long
+    val modified: Long,
+    val duration: Long = 0L
 ) {
     val ext: String get() = name.substringAfterLast('.', "").lowercase()
 }

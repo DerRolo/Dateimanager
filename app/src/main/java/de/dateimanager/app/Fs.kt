@@ -76,16 +76,25 @@ object Fs {
         val out = ArrayList<FileItem>()
         val seen = HashSet<String>()
         val uri = MediaStore.Files.getContentUri("external")
-        ctx.contentResolver.query(uri, arrayOf(FileColumns.DATA, FileColumns.DATE_ADDED), sel, args, null)?.use { c ->
+        val wantDuration = section == Section.Music || section == Section.Videos
+        val cursor = try {
+            val proj = if (wantDuration) arrayOf(FileColumns.DATA, FileColumns.DATE_ADDED, "duration")
+            else arrayOf(FileColumns.DATA, FileColumns.DATE_ADDED)
+            ctx.contentResolver.query(uri, proj, sel, args, null)
+        } catch (e: Exception) {
+            ctx.contentResolver.query(uri, arrayOf(FileColumns.DATA, FileColumns.DATE_ADDED), sel, args, null)
+        }
+        cursor?.use { c ->
             val iData = c.getColumnIndexOrThrow(FileColumns.DATA)
             val iAdded = c.getColumnIndexOrThrow(FileColumns.DATE_ADDED)
+            val iDur = c.getColumnIndex("duration")
             while (c.moveToNext()) {
                 val p = c.getString(iData) ?: continue
                 if (p.contains("/.") || p.contains("/Android/data/")) continue
                 val f = File(p)
                 if (!f.isFile || !seen.add(p)) continue
                 val mod = if (section == Section.Recent) maxOf(f.lastModified(), c.getLong(iAdded) * 1000) else f.lastModified()
-                out += FileItem(p, f.name, false, f.length(), mod)
+                out += FileItem(p, f.name, false, f.length(), mod, if (iDur >= 0) c.getLong(iDur) else 0L)
             }
         }
         if (section == Section.Recent) {
@@ -102,6 +111,7 @@ object Fs {
             SortBy.Name -> Comparator { a, b -> a.name.compareTo(b.name, ignoreCase = true) }
             SortBy.Date -> Comparator { a, b -> a.modified.compareTo(b.modified) }
             SortBy.Size -> Comparator { a, b -> a.size.compareTo(b.size) }
+            SortBy.Duration -> Comparator { a, b -> a.duration.compareTo(b.duration) }
         }
         val dir = if (asc) base else base.reversed()
         return if (foldersFirst) {
@@ -135,6 +145,23 @@ object Fs {
             i++
         }
         return String.format(Locale.GERMAN, "%.1f %s", v, units[i])
+    }
+
+    fun formatDuration(ms: Long): String {
+        val s = ms / 1000
+        val h = s / 3600
+        val m = (s % 3600) / 60
+        val sec = s % 60
+        return if (h > 0) String.format(Locale.GERMAN, "%d:%02d:%02d", h, m, sec)
+        else String.format(Locale.GERMAN, "%d:%02d", m, sec)
+    }
+
+    /** Kürzt lange Namen in der Mitte, Anfang und Ende (mit Endung) bleiben sichtbar. */
+    fun middleEllipsis(name: String, max: Int): String {
+        if (name.length <= max) return name
+        val tail = minOf(10, max / 3)
+        val head = max - tail - 1
+        return name.take(head) + "…" + name.takeLast(tail)
     }
 
     // ---------- Dateioperationen ----------

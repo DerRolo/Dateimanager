@@ -33,6 +33,20 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     var selected by mutableStateOf<Set<String>>(emptySet())
     var clip by mutableStateOf<Clip?>(null)
 
+    private val prefs = app.getSharedPreferences("settings", 0)
+
+    private fun loadView(s: Section): ViewMode {
+        val def = if (s == Section.Images || s == Section.Videos) ViewMode.Grid else ViewMode.List
+        return try {
+            ViewMode.valueOf(prefs.getString("view_${s.name}", def.name) ?: def.name)
+        } catch (e: Exception) {
+            def
+        }
+    }
+
+    var viewMode by mutableStateOf(loadView(Section.Browse))
+    var pdfQuick by mutableStateOf(prefs.getBoolean("pdf_quick", true))
+
     private var job: Job? = null
     private val sortMemory = mutableMapOf<Section, Pair<SortBy, Boolean>>()
 
@@ -94,6 +108,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         if (s == section) return
         sortMemory[section] = sortBy to asc
         section = s
+        viewMode = loadView(s)
         val (by, a) = sortMemory[s] ?: defaultSort(s)
         sortBy = by
         asc = a
@@ -130,6 +145,16 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
             searching -> closeSearch()
             canGoUp() -> openDir(dir!!.parentFile!!)
         }
+    }
+
+    fun toggleView() {
+        viewMode = if (viewMode == ViewMode.List) ViewMode.Grid else ViewMode.List
+        prefs.edit().putString("view_${section.name}", viewMode.name).apply()
+    }
+
+    fun togglePdfQuick() {
+        pdfQuick = !pdfQuick
+        prefs.edit().putBoolean("pdf_quick", pdfQuick).apply()
     }
 
     // ---------- Suche & Sortierung ----------
