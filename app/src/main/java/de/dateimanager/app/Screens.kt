@@ -76,6 +76,8 @@ sealed interface Dlg {
     data class Delete(val items: List<FileItem>) : Dlg
     data class AlbumOptions(val info: AlbumInfo) : Dlg
     data class MoveToAlbum(val paths: List<String>) : Dlg
+    data class AddToTag(val paths: List<String>) : Dlg
+    data class TagOptions(val info: AlbumInfo) : Dlg
     object NewFolder : Dlg
     object EmptyTrash : Dlg
 }
@@ -91,7 +93,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
     val selectedItems = entries.filter { it.path in vm.selected }
     val selMode = vm.selected.isNotEmpty()
     val inTrash = vm.section == Section.Trash
-    val special = vm.section == Section.Other || inTrash
+    val special = !vm.section.inTabs
     val hasSub = vm.hasSub(vm.section)
     val dupMode = hasSub && vm.subMode == SubMode.Dupes
     val tabs = remember { Section.values().filter { it.inTabs } }
@@ -112,7 +114,8 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
     val onItemClick: (FileItem) -> Unit = { item ->
         when {
             selMode -> vm.toggle(item.path)
-            item.isDir -> vm.openDir(File(item.path))
+            item.isDir && vm.section == Section.Browse -> vm.openDir(File(item.path))
+            item.isDir -> vm.showInFiles(item.path)
             item.ext == "pdf" && vm.pdfQuick -> pdfPath = item.path
             else -> Fs.open(ctx, File(item.path))
         }
@@ -159,6 +162,22 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                                 dialog = Dlg.MoveToAlbum(selectedItems.map { it.path }); menu = false
                                             })
                                         }
+                                        val allFav = selectedItems.all { it.path in vm.marks.favorites }
+                                        DropdownMenuItem(text = { Text(if (allFav) "Aus Favoriten entfernen" else "Zu Favoriten") }, onClick = {
+                                            vm.toggleFavorites(selectedItems.map { it.path }); menu = false
+                                        })
+                                        val allLocked = selectedItems.all { it.path in vm.marks.locked }
+                                        DropdownMenuItem(text = { Text(if (allLocked) "Entsperren" else "Sperren (vor Löschen schützen)") }, onClick = {
+                                            vm.toggleLock(selectedItems.map { it.path }); menu = false
+                                        })
+                                        DropdownMenuItem(text = { Text("Zu Sammlung hinzufügen …") }, onClick = {
+                                            dialog = Dlg.AddToTag(selectedItems.map { it.path }); menu = false
+                                        })
+                                        if (vm.section == Section.Collections && vm.albumDir != null) {
+                                            DropdownMenuItem(text = { Text("Aus Sammlung entfernen") }, onClick = {
+                                                vm.removeFromTag(selectedItems.map { it.path }); menu = false
+                                            })
+                                        }
                                         if (selectedItems.size == 1) {
                                             DropdownMenuItem(text = { Text("Umbenennen") }, onClick = {
                                                 dialog = Dlg.Rename(selectedItems[0]); menu = false
@@ -202,10 +221,14 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                 val d = vm.dir
                                 vm.roots.firstOrNull { it.dir == d }?.name ?: d?.name ?: "Dateien"
                             }
-                            ad != null -> if (ad == FmViewModel.INBOX) "Nicht zugeordnet" else File(ad).name
+                            ad != null -> when {
+                                ad == FmViewModel.INBOX -> "Nicht zugeordnet"
+                                ad.startsWith("tag:") -> ad.removePrefix("tag:")
+                                else -> File(ad).name
+                            }
                             else -> vm.section.title
                         }
-                        val showTools = vm.section != Section.Storage && !dupMode
+                        val showTools = vm.section != Section.Storage && vm.section != Section.More && !dupMode
                         TopAppBar(
                             title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             navigationIcon = {
@@ -216,7 +239,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                 }
                             },
                             actions = {
-                                if (vm.section != Section.Storage) {
+                                if (vm.section != Section.Storage && vm.section != Section.More) {
                                     IconButton(onClick = { vm.openSearch() }) { Icon(Icons.Default.Search, "Suchen") }
                                 }
                                 if (showTools) {
@@ -277,7 +300,10 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                             Tab(selected = vm.section == s, onClick = { vm.selectSection(s) }, text = { Text(s.title) })
                         }
                     }
-                    if (hasSub && !vm.searching) SubModeChips(vm)
+                }
+                if (!selMode && hasSub && !vm.searching) {
+                    SubModeChips(vm)
+                    if (vm.section == Section.Docs && vm.subMode == SubMode.All) DocFilterChips(vm)
                 }
             }
         },
@@ -309,13 +335,21 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (vm.section == Section.Storage) {
                 StorageScreen(vm)
+            } else if (vm.section == Section.More) {
+                MoreScreen { vm.selectSection(it) }
             } else {
                 if (dupMode) DupBar(vm)
                 if (rows.isEmpty()) {
                     if (!vm.loading && !dupMode) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
-                                if (vm.query.isNotBlank()) "Keine Treffer" else "Keine Dateien",
+                                when {
+                                    vm.query.isNotBlank() -> "Keine Treffer"
+                                    vm.section == Section.Collections -> "Noch keine Sammlungen. Markiere Dateien und wähle ⋮ → „Zu Sammlung hinzufügen“."
+                                    vm.section == Section.Favorites -> "Noch keine Favoriten. Markiere Dateien oder Ordner und wähle ⋮ → „Zu Favoriten“."
+                                    vm.section == Section.Locked -> "Keine gesperrten Dateien."
+                                    else -> "Keine Dateien"
+                                },
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -344,7 +378,11 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                             loader = loader,
                                             onClick = { vm.openAlbum(row.info.path) },
                                             onLongClick = {
-                                                if (row.info.path != FmViewModel.INBOX) dialog = Dlg.AlbumOptions(row.info)
+                                                if (row.info.path.startsWith("tag:")) {
+                                                    dialog = Dlg.TagOptions(row.info)
+                                                } else if (row.info.path != FmViewModel.INBOX) {
+                                                    dialog = Dlg.AlbumOptions(row.info)
+                                                }
                                             }
                                         )
                                         is Row.Entry -> FileRow(
@@ -352,6 +390,8 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                             selected = row.item.path in vm.selected,
                                             showFolder = showFolder,
                                             dup = row.item.path in vm.dupPaths,
+                                            lock = vm.marks.isLocked(row.item.path),
+                                            fav = row.item.path in vm.marks.favorites,
                                             loader = loader,
                                             onClick = { onItemClick(row.item) },
                                             onLongClick = { vm.toggle(row.item.path) }
@@ -364,7 +404,8 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                 total = rows.size,
                                 firstVisible = listState.firstVisibleItemIndex,
                                 visible = listState.layoutInfo.visibleItemsInfo.size,
-                                scrolling = listState.isScrollInProgress
+                                scrolling = listState.isScrollInProgress,
+                                label = { idx -> rowLabel(rows, idx, vm.sortBy) }
                             ) { i -> scope.launch { listState.scrollToItem(i) } }
                         } else {
                             LazyVerticalGrid(
@@ -400,13 +441,19 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                             loader = loader,
                                             onClick = { vm.openAlbum(row.info.path) },
                                             onLongClick = {
-                                                if (row.info.path != FmViewModel.INBOX) dialog = Dlg.AlbumOptions(row.info)
+                                                if (row.info.path.startsWith("tag:")) {
+                                                    dialog = Dlg.TagOptions(row.info)
+                                                } else if (row.info.path != FmViewModel.INBOX) {
+                                                    dialog = Dlg.AlbumOptions(row.info)
+                                                }
                                             }
                                         )
                                         is Row.Entry -> FileTile(
                                             item = row.item,
                                             selected = row.item.path in vm.selected,
                                             dup = row.item.path in vm.dupPaths,
+                                            lock = vm.marks.isLocked(row.item.path),
+                                            fav = row.item.path in vm.marks.favorites,
                                             loader = loader,
                                             onClick = { onItemClick(row.item) },
                                             onLongClick = { vm.toggle(row.item.path) }
@@ -419,7 +466,8 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                 total = rows.size,
                                 firstVisible = gridState.firstVisibleItemIndex,
                                 visible = gridState.layoutInfo.visibleItemsInfo.size,
-                                scrolling = gridState.isScrollInProgress
+                                scrolling = gridState.isScrollInProgress,
+                                label = { idx -> rowLabel(rows, idx, vm.sortBy) }
                             ) { i -> scope.launch { gridState.scrollToItem(i) } }
                         }
                     }
@@ -437,7 +485,8 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             inTrash = inTrash,
             onTrash = { vm.trash(d.items.map { it.path }); dialog = null },
             onForever = { vm.deleteForever(d.items.map { it.path }); dialog = null },
-            onDismiss = { dialog = null }
+            onDismiss = { dialog = null },
+            lockedCount = d.items.count { vm.marks.isProtected(it.path) }
         )
         is Dlg.AlbumOptions -> AlbumOptionsDialog(
             info = d.info,
@@ -453,6 +502,21 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             albums = vm.albumInfos.filter { !it.inbox },
             onPick = { vm.moveInto(d.paths, File(it.path)); dialog = null },
             onCreate = { vm.moveInto(d.paths, File(vm.newAlbumBase(), it.trim())); dialog = null },
+            onDismiss = { dialog = null }
+        )
+        is Dlg.AddToTag -> AlbumPickerDialog(
+            albums = vm.marks.tags.map { (k, v) -> AlbumInfo(k, k, v.size, 0L, 0L, "", false) },
+            onPick = { vm.addToTag(it.name, d.paths); dialog = null },
+            onCreate = { vm.addToTag(it, d.paths); dialog = null },
+            onDismiss = { dialog = null },
+            title = "Zu Sammlung hinzufügen",
+            newLabel = "Neue Sammlung"
+        )
+        is Dlg.TagOptions -> ConfirmDialog(
+            title = "Sammlung auflösen",
+            text = "„${d.info.name}“ auflösen? Die Dateien bleiben unverändert.",
+            confirm = "Auflösen",
+            onOk = { vm.deleteTag(d.info.name); dialog = null },
             onDismiss = { dialog = null }
         )
         Dlg.NewFolder -> NameDialog("Neuer Ordner", "", "Erstellen", false, { dialog = null }) {

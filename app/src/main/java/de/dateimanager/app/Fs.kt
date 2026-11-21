@@ -21,7 +21,35 @@ object Fs {
 
     private val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
 
-    val DOC_EXTS = listOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "txt", "epub")
+    val DOC_EXTS = listOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "txt", "epub", "md", "tex")
+    private val ARCHIVE_EXTS = listOf("zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "apk", "xapk", "apks", "aab", "iso")
+    private val MESSENGER_KEYS = listOf("whatsapp", "telegram", "signal", "snapchat", "instagram", "messenger", "threema", "viber")
+    private val RECORDING_KEYS = listOf(
+        "whatsapp", "telegram", "/recordings/", "/recorder", "/voice recorder", "/voice_recorder", "/voicerecorder",
+        "/voice memos", "/voicememos", "/voice notes", "/sprach", "/aufnahme", "/call recordings", "/callrecord",
+        "/sound_recorder", "/soundrecorder", "/ringtones/", "/notifications/", "/alarms/"
+    )
+
+    /** Sprachnachrichten, Aufnahmen und Töne – gehören nicht zur Musik. */
+    fun isRecordingPath(p: String): Boolean {
+        val low = p.lowercase()
+        for (k in RECORDING_KEYS) if (low.contains(k)) return true
+        val n = low.substringAfterLast('/')
+        return n.startsWith("ptt-") || n.startsWith("aud-") || n.startsWith("voice ") || n.startsWith("recording") ||
+            n.startsWith("aufnahme") || n.startsWith("sprachnachricht")
+    }
+
+    private fun likeAny(pats: List<String>): Pair<String, Array<String>> =
+        pats.joinToString(" OR ", "(", ")") { "${FileColumns.DATA} LIKE ?" } to pats.toTypedArray()
+
+    fun monthKey(ts: Long): Long {
+        val d = Instant.ofEpochMilli(ts).atZone(ZoneId.systemDefault()).toLocalDate()
+        return d.year * 12L + (d.monthValue - 1)
+    }
+
+    fun monthLabel(k: Long): String =
+        LocalDate.of((k / 12).toInt(), (k % 12).toInt() + 1, 1)
+            .format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.GERMAN))
 
     fun roots(ctx: Context): List<Root> {
         val primary = Environment.getExternalStorageDirectory()
@@ -73,15 +101,20 @@ object Fs {
         return out
     }
 
-    /** Dokumente, Musik, Bilder, Videos, Sonstiges und Kürzlich über die Medien-Datenbank (schnell). */
+    /** Alle Kategorien über die Medien-Datenbank (schnell). */
     fun media(ctx: Context, section: Section): List<FileItem> {
         val (sel, args) = when (section) {
-            Section.Docs -> DOC_EXTS.joinToString(" OR ", "(", ")") { "${FileColumns.DATA} LIKE ?" } to
-                DOC_EXTS.map { "%.$it" }.toTypedArray()
-            Section.Music -> "${FileColumns.MEDIA_TYPE}=?" to arrayOf(FileColumns.MEDIA_TYPE_AUDIO.toString())
+            Section.Docs -> likeAny(DOC_EXTS.map { "%.$it" })
+            Section.Music, Section.Recordings ->
+                "${FileColumns.MEDIA_TYPE}=?" to arrayOf(FileColumns.MEDIA_TYPE_AUDIO.toString())
             Section.Images -> "${FileColumns.MEDIA_TYPE}=?" to arrayOf(FileColumns.MEDIA_TYPE_IMAGE.toString())
             Section.Videos -> "${FileColumns.MEDIA_TYPE}=?" to arrayOf(FileColumns.MEDIA_TYPE_VIDEO.toString())
             Section.Other -> "${FileColumns.MEDIA_TYPE} NOT IN (1,2,3)" to emptyArray<String>()
+            Section.Downloads -> likeAny(listOf("%/Download/%", "%/Downloads/%"))
+            Section.Screenshots -> likeAny(listOf("%/screenshot%", "%/screen%record%"))
+            Section.Archives -> likeAny(ARCHIVE_EXTS.map { "%.$it" })
+            Section.Messenger -> likeAny(MESSENGER_KEYS.map { "%$it%" })
+            Section.Largest -> "${FileColumns.SIZE}>=?" to arrayOf((5L * 1024 * 1024).toString())
             Section.Recent -> {
                 val cutoff = (System.currentTimeMillis() / 1000 - 30L * 86400).toString()
                 "${FileColumns.DATE_MODIFIED}>=? OR ${FileColumns.DATE_ADDED}>=?" to arrayOf(cutoff, cutoff)
@@ -91,7 +124,7 @@ object Fs {
         val out = ArrayList<FileItem>()
         val seen = HashSet<String>()
         val uri = MediaStore.Files.getContentUri("external")
-        val wantDuration = section == Section.Music || section == Section.Videos
+        val wantDuration = section == Section.Music || section == Section.Videos || section == Section.Recordings
         val cursor = try {
             val proj = if (wantDuration) arrayOf(FileColumns.DATA, FileColumns.DATE_ADDED, "duration")
             else arrayOf(FileColumns.DATA, FileColumns.DATE_ADDED)
@@ -106,6 +139,8 @@ object Fs {
             while (c.moveToNext()) {
                 val p = c.getString(iData) ?: continue
                 if (p.contains("/.") || p.contains("/Android/data/")) continue
+                if (section == Section.Music && isRecordingPath(p)) continue
+                if (section == Section.Recordings && !isRecordingPath(p)) continue
                 val f = File(p)
                 if (!f.isFile || !seen.add(p)) continue
                 if (section == Section.Other && f.extension.lowercase() in DOC_EXTS) continue
@@ -117,15 +152,20 @@ object Fs {
             out.sortByDescending { it.modified }
             return out.take(1500)
         }
+        if (section == Section.Largest) {
+            out.sortByDescending { it.size }
+            return out.take(300)
+        }
         return out
     }
 
-    /** Belegung pro Speicher, aufgeteilt nach Bildern, Videos, Musik, Dokumenten. */
+    /** Belegung pro Speicher, aufgeteilt nach Bildern, Videos, Musik, Aufnahmen, Dokumenten. */
     fun storageStats(ctx: Context, roots: List<Root>): List<VolumeStats> {
         val n = roots.size
         val img = LongArray(n)
         val vid = LongArray(n)
         val mus = LongArray(n)
+        val rec = LongArray(n)
         val doc = LongArray(n)
         val uri = MediaStore.Files.getContentUri("external")
         val proj = arrayOf(FileColumns.DATA, FileColumns.SIZE, FileColumns.MEDIA_TYPE)
@@ -142,15 +182,16 @@ object Fs {
                 val type = c.getInt(iT)
                 if (type == FileColumns.MEDIA_TYPE_IMAGE) img[vi] += size
                 else if (type == FileColumns.MEDIA_TYPE_VIDEO) vid[vi] += size
-                else if (type == FileColumns.MEDIA_TYPE_AUDIO) mus[vi] += size
-                else if (p.substringAfterLast('.', "").lowercase() in DOC_EXTS) doc[vi] += size
+                else if (type == FileColumns.MEDIA_TYPE_AUDIO) {
+                    if (isRecordingPath(p)) rec[vi] += size else mus[vi] += size
+                } else if (p.substringAfterLast('.', "").lowercase() in DOC_EXTS) doc[vi] += size
             }
         }
         val out = ArrayList<VolumeStats>()
         roots.forEachIndexed { i, r ->
             try {
                 val st = StatFs(r.dir.path)
-                out.add(VolumeStats(r.name, st.totalBytes, st.availableBytes, img[i], vid[i], mus[i], doc[i]))
+                out.add(VolumeStats(r.name, st.totalBytes, st.availableBytes, img[i], vid[i], mus[i], rec[i], doc[i]))
             } catch (e: Exception) {
             }
         }

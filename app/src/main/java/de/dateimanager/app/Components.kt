@@ -37,7 +37,15 @@ import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
@@ -58,6 +66,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -149,10 +158,11 @@ fun FastScroller(
     firstVisible: Int,
     visible: Int,
     scrolling: Boolean,
+    label: (Int) -> String,
     onScrollTo: (Int) -> Unit
 ) {
     if (visible <= 0 || total <= visible * 2) return
-    BoxWithConstraints(modifier.fillMaxHeight().width(24.dp)) {
+    BoxWithConstraints(modifier.fillMaxHeight().width(150.dp)) {
         val density = LocalDensity.current
         val trackPx = with(density) { maxHeight.toPx() }
         val thumbPx = with(density) { 56.dp.toPx() }
@@ -165,7 +175,7 @@ fun FastScroller(
         fun fractionFor(y: Float): Float = ((y - thumbPx / 2) / (trackPx - thumbPx)).coerceIn(0f, 1f)
 
         Box(
-            Modifier.fillMaxSize().pointerInput(total, visible, trackPx) {
+            Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(24.dp).pointerInput(total, visible, trackPx) {
                 detectDragGestures(
                     onDragStart = { o ->
                         dragging = true
@@ -191,7 +201,50 @@ fun FastScroller(
                 .alpha(alpha)
                 .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
         )
+        if (dragging) {
+            val text = label((dragFraction * range).roundToInt())
+            if (text.isNotEmpty()) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopEnd)
+                        .offset { IntOffset(0, (frac * (trackPx - thumbPx)).roundToInt()) }
+                        .padding(end = 36.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shadowElevation = 4.dp
+                ) {
+                    Text(
+                        text,
+                        Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                }
+            }
+        }
     }
+}
+
+/** Beschriftung neben der Schnellscroll-Leiste (Monat, Tag, Anfangsbuchstabe ...). */
+fun rowLabel(rows: List<Row>, index: Int, sortBy: SortBy): String {
+    if (rows.isEmpty()) return ""
+    val i = index.coerceIn(0, rows.size - 1)
+    val r = rows[i]
+    if (r is Row.Header) return r.label
+    if (r is Row.Album) return r.info.name.take(1).uppercase()
+    if (r is Row.Entry) {
+        var j = i
+        while (j >= 0) {
+            val x = rows[j]
+            if (x is Row.Header) return x.label
+            j--
+        }
+        return when (sortBy) {
+            SortBy.Name -> r.item.name.take(1).uppercase()
+            SortBy.Date -> Fs.monthLabel(Fs.monthKey(r.item.modified))
+            SortBy.Size -> Fs.formatSize(r.item.size)
+            SortBy.Duration -> Fs.formatDuration(r.item.duration)
+        }
+    }
+    return ""
 }
 
 // ---------- Dialoge ----------
@@ -228,7 +281,8 @@ fun DeleteDialog(
     inTrash: Boolean,
     onTrash: () -> Unit,
     onForever: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    lockedCount: Int = 0
 ) {
     val what = if (items.size == 1) "„${items[0].name}“" else "${items.size} Elemente"
     AlertDialog(
@@ -240,6 +294,13 @@ fun DeleteDialog(
                     if (inTrash) "$what endgültig löschen? Das lässt sich nicht rückgängig machen."
                     else "$what in den Papierkorb verschieben? Dort bleibt es 30 Tage wiederherstellbar."
                 )
+                if (lockedCount > 0) {
+                    Text(
+                        "$lockedCount gesperrte Dateien werden übersprungen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 if (!inTrash) {
                     TextButton(onClick = onForever) { Text("Stattdessen endgültig löschen") }
                 }
@@ -296,24 +357,26 @@ fun AlbumPickerDialog(
     albums: List<AlbumInfo>,
     onPick: (AlbumInfo) -> Unit,
     onCreate: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    title: String = "In Album verschieben",
+    newLabel: String = "Neues Album"
 ) {
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("In Album verschieben") },
+        title = { Text(title) },
         text = {
             Column {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
                     singleLine = true,
-                    label = { Text("Neues Album") },
+                    label = { Text(newLabel) },
                     modifier = Modifier.fillMaxWidth()
                 )
                 TextButton(onClick = { if (name.isNotBlank()) onCreate(name) }) { Text("Erstellen & verschieben") }
                 if (albums.isNotEmpty()) {
-                    Text("Vorhandene Alben", style = MaterialTheme.typography.labelLarge)
+                    Text("Vorhanden", style = MaterialTheme.typography.labelLarge)
                     Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
                         for (a in albums) {
                             Row(
@@ -427,6 +490,17 @@ fun PathBar(vm: FmViewModel) {
                 }
             }
         }
+        val favDirs = vm.marks.favorites.filter { File(it).isDirectory }.sorted()
+        if (favDirs.isNotEmpty()) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                favDirs.forEach { p ->
+                    FilterChip(selected = false, onClick = { vm.openDir(File(p)) }, label = { Text("★ " + File(p).name) })
+                }
+            }
+        }
         val d = vm.dir
         if (d != null && active != null) {
             val crumbs = remember(d, active) {
@@ -466,7 +540,9 @@ fun SubModeChips(vm: FmViewModel) {
         Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        SubMode.values().forEach { m ->
+        SubMode.values().filter {
+            it != SubMode.Timeline || vm.section == Section.Images || vm.section == Section.Videos
+        }.forEach { m ->
             FilterChip(selected = vm.subMode == m, onClick = { vm.chooseSubMode(m) }, label = { Text(m.label) })
         }
     }
@@ -530,10 +606,11 @@ fun VolumeCard(v: VolumeStats, onOpen: (Section) -> Unit) {
         Triple("Bilder", Color(0xFF43A047), v.images),
         Triple("Videos", Color(0xFF8E24AA), v.videos),
         Triple("Musik", Color(0xFFE53935), v.music),
+        Triple("Aufnahmen", Color(0xFF00897B), v.recordings),
         Triple("Dokumente", Color(0xFF1E88E5), v.docs),
         Triple("Sonstiges", Color(0xFF757575), v.other)
     )
-    val targets = listOf(Section.Images, Section.Videos, Section.Music, Section.Docs, Section.Other)
+    val targets = listOf(Section.Images, Section.Videos, Section.Music, Section.Recordings, Section.Docs, Section.Other)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text(v.name, style = MaterialTheme.typography.titleMedium)
@@ -603,6 +680,8 @@ fun FileRow(
     selected: Boolean,
     showFolder: Boolean,
     dup: Boolean,
+    lock: Boolean,
+    fav: Boolean,
     loader: ImageLoader,
     onClick: () -> Unit,
     onLongClick: () -> Unit
@@ -648,13 +727,7 @@ fun FileRow(
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.weight(1f, fill = false)
                 )
-                if (dup) {
-                    Icon(
-                        Icons.Default.ContentCopy, "Duplikat",
-                        tint = DUP_COLOR,
-                        modifier = Modifier.padding(start = 6.dp).size(14.dp)
-                    )
-                }
+                BadgeIcons(dup, lock, fav, false, Modifier.padding(start = 6.dp))
             }
             val parts = ArrayList<String>()
             if (item.duration > 0) parts.add(Fs.formatDuration(item.duration))
@@ -683,6 +756,8 @@ fun FileTile(
     item: FileItem,
     selected: Boolean,
     dup: Boolean,
+    lock: Boolean,
+    fav: Boolean,
     loader: ImageLoader,
     onClick: () -> Unit,
     onLongClick: () -> Unit
@@ -722,14 +797,7 @@ fun FileTile(
                         .padding(horizontal = 4.dp)
                 )
             }
-            if (dup) {
-                Icon(
-                    Icons.Default.ContentCopy, "Duplikat",
-                    tint = Color.White,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)
-                        .background(DUP_COLOR, CircleShape).padding(3.dp)
-                )
-            }
+            BadgeIcons(dup, lock, fav, true, Modifier.align(Alignment.TopEnd).padding(4.dp))
             if (selected) {
                 Icon(
                     Icons.Default.CheckCircle, null,
@@ -870,5 +938,75 @@ fun PermissionScreen(onGrant: () -> Unit) {
         )
         Spacer(Modifier.height(24.dp))
         Button(onClick = onGrant) { Text("Berechtigung erteilen") }
+    }
+}
+
+// ---------- Markierungs-Symbole ----------
+
+@Composable
+fun BadgeIcons(dup: Boolean, lock: Boolean, fav: Boolean, onImage: Boolean, modifier: Modifier = Modifier) {
+    if (!dup && !lock && !fav) return
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        if (fav) BadgeIcon(Icons.Default.Star, "Favorit", Color(0xFFFFB300), onImage)
+        if (lock) BadgeIcon(Icons.Default.Lock, "Gesperrt", Color(0xFF42A5F5), onImage)
+        if (dup) BadgeIcon(Icons.Default.ContentCopy, "Duplikat", DUP_COLOR, onImage)
+    }
+}
+
+@Composable
+fun BadgeIcon(icon: ImageVector, desc: String, tint: Color, onImage: Boolean) {
+    val m = if (onImage) Modifier.size(20.dp).background(Color(0xAA000000), CircleShape).padding(3.dp)
+    else Modifier.size(14.dp)
+    Icon(icon, desc, tint = tint, modifier = m)
+}
+
+// ---------- Dokument-Filter ----------
+
+@Composable
+fun DocFilterChips(vm: FmViewModel) {
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        DocFilter.values().forEach { f ->
+            FilterChip(selected = vm.docFilter == f, onClick = { vm.docFilter = f }, label = { Text(f.label) })
+        }
+    }
+}
+
+// ---------- Mehr: weitere Kategorien ----------
+
+private data class MoreEntry(val icon: ImageVector, val title: String, val desc: String, val section: Section)
+
+@Composable
+fun MoreScreen(onOpen: (Section) -> Unit) {
+    val list = listOf(
+        MoreEntry(Icons.Default.Download, "Downloads", "Alles aus dem Download-Ordner", Section.Downloads),
+        MoreEntry(Icons.Default.Smartphone, "Screenshots & Bildschirmaufnahmen", "Getrennt von deinen Fotos", Section.Screenshots),
+        MoreEntry(Icons.Default.FolderZip, "Archive & Apps", "zip, rar, 7z, apk …", Section.Archives),
+        MoreEntry(Icons.Default.ChatBubble, "Messenger-Medien", "WhatsApp, Telegram & Co. nach Ordnern", Section.Messenger),
+        MoreEntry(Icons.Default.Storage, "Größte Dateien", "Die größten Platzfresser zuerst", Section.Largest),
+        MoreEntry(Icons.Default.Bookmark, "Sammlungen", "Eigene Gruppen, ohne Dateien zu verschieben", Section.Collections),
+        MoreEntry(Icons.Default.Lock, "Gesperrte Dateien", "Vor dem Löschen geschützt", Section.Locked),
+        MoreEntry(Icons.Default.Delete, "Papierkorb", "30 Tage wiederherstellbar", Section.Trash)
+    )
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        list.forEach { e ->
+            Row(
+                Modifier.fillMaxWidth().clickable { onOpen(e.section) }.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(e.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+                Spacer(Modifier.size(16.dp))
+                Column {
+                    Text(e.title, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        e.desc,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 }

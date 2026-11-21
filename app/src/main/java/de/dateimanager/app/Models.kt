@@ -3,16 +3,32 @@ package de.dateimanager.app
 import java.io.File
 
 enum class Section(val title: String, val inTabs: Boolean = true) {
-    Browse("Dateien"), Recent("Kürzlich"), Docs("Dokumente"),
-    Music("Musik"), Images("Bilder"), Videos("Videos"),
-    Storage("Speicher"), Other("Sonstiges", false), Trash("Papierkorb", false)
+    Browse("Dateien"), Recent("Kürzlich"), Favorites("Favoriten"), Docs("Dokumente"),
+    Music("Musik"), Recordings("Aufnahmen"), Images("Bilder"), Videos("Videos"),
+    More("Mehr"), Storage("Speicher"),
+    Other("Sonstiges", false), Trash("Papierkorb", false),
+    Downloads("Downloads", false), Screenshots("Screenshots", false),
+    Archives("Archive & Apps", false), Messenger("Messenger", false),
+    Largest("Größte Dateien", false), Collections("Sammlungen", false),
+    Locked("Gesperrt", false)
 }
 
 enum class SortBy(val label: String) { Name("Name"), Date("Datum"), Size("Größe"), Duration("Länge") }
 
 enum class ViewMode { List, Grid }
 
-enum class SubMode(val label: String) { All("Alle"), Albums("Alben & Ordner"), Dupes("Duplikate") }
+enum class SubMode(val label: String) {
+    All("Alle"), Albums("Alben & Ordner"), Timeline("Zeitleiste"), Dupes("Duplikate")
+}
+
+enum class DocFilter(val label: String, val exts: Set<String>) {
+    All("Alle", emptySet()),
+    Pdf("PDF", setOf("pdf")),
+    Office("Office", setOf("doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp")),
+    Text("Text", setOf("txt", "md", "tex", "rtf", "epub"));
+
+    fun matches(ext: String): Boolean = exts.isEmpty() || ext in exts
+}
 
 data class Root(val name: String, val dir: File)
 
@@ -49,10 +65,11 @@ data class VolumeStats(
     val images: Long,
     val videos: Long,
     val music: Long,
+    val recordings: Long,
     val docs: Long
 ) {
     val used: Long get() = (total - free).coerceAtLeast(0L)
-    val other: Long get() = (used - images - videos - music - docs).coerceAtLeast(0L)
+    val other: Long get() = (used - images - videos - music - recordings - docs).coerceAtLeast(0L)
 }
 
 enum class Kind { Folder, Image, Video, Audio, Pdf, Archive, Apk, Text, Other }

@@ -20,7 +20,9 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         const val INBOX = "::inbox"
-        private val ALBUM_SECTIONS = setOf(Section.Docs, Section.Music, Section.Images, Section.Videos)
+        private val ALBUM_SECTIONS = setOf(
+            Section.Docs, Section.Music, Section.Recordings, Section.Images, Section.Videos, Section.Messenger
+        )
         private val INBOX_NAMES = setOf(
             "camera", "screenshots", "screenshot", "screen recordings", "screenrecorder", "screen_recorder",
             "download", "downloads", "bluetooth", "telegram", "snapchat", "instagram", "facebook",
@@ -35,7 +37,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadSet(key: String): Set<String> = prefs.getStringSet(key, emptySet())?.toSet() ?: emptySet()
 
     private fun loadView(s: Section): ViewMode {
-        val def = if (s == Section.Images || s == Section.Videos) ViewMode.Grid else ViewMode.List
+        val def = if (s == Section.Images || s == Section.Videos || s == Section.Screenshots) ViewMode.Grid else ViewMode.List
         return try {
             ViewMode.valueOf(prefs.getString("view_${s.name}", def.name) ?: def.name)
         } catch (e: Exception) {
@@ -64,6 +66,8 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     var albumSet by mutableStateOf(loadSet("albums"))
     var viewMode by mutableStateOf(loadView(Section.Browse))
     var pdfQuick by mutableStateOf(prefs.getBoolean("pdf_quick", true))
+    val marks = Marks(prefs)
+    var docFilter by mutableStateOf(DocFilter.All)
 
     private var job: Job? = null
     private var dupJob: Job? = null
@@ -92,6 +96,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     // ---------- Klassifizierung: Eingang oder Album ----------
 
     fun isInbox(dirPath: String): Boolean {
+        if (section == Section.Messenger) return false
         if (dirPath in albumSet) return false
         if (dirPath in inboxSet) return true
         val low = dirPath.lowercase()
@@ -99,12 +104,19 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         return low.contains("whatsapp") || low.contains("telegram")
     }
 
+    private fun albumName(p: String): String {
+        val f = File(p)
+        val n = f.name
+        val parent = f.parentFile?.name
+        return if (parent != null && n.lowercase() in setOf("sent", "private", "received")) "$parent › $n" else n
+    }
+
     private fun albumsOf(list: List<FileItem>): List<AlbumInfo> =
         list.groupBy { File(it.path).parent ?: "" }.map { (p, fs) ->
             val cover = fs.maxByOrNull { it.modified }!!
             var total = 0L
             for (f in fs) total += f.size
-            AlbumInfo(p, File(p).name, fs.size, total, cover.modified, cover.path, isInbox(p))
+            AlbumInfo(p, albumName(p), fs.size, total, cover.modified, cover.path, isInbox(p))
         }
 
     private fun sortAlbums(l: List<AlbumInfo>): List<AlbumInfo> {
@@ -119,8 +131,15 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     // ---------- Zeilen für die Anzeige ----------
 
     private fun buildRows(): List<Row> {
-        if (section == Section.Storage) return emptyList()
+        if (section == Section.Storage || section == Section.More) return emptyList()
         var list = items
+        if (section == Section.Docs && docFilter != DocFilter.All) list = list.filter { docFilter.matches(it.ext) }
+        if (section == Section.Collections) {
+            val ad = albumDir
+            if (ad == null) return tagRows()
+            val set = marks.tags[ad.removePrefix("tag:")].orEmpty()
+            list = list.filter { it.path in set }
+        }
         if (hasSub(section)) {
             when (subMode) {
                 SubMode.Dupes -> return dupRows()
@@ -130,12 +149,20 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
                     list = if (ad == INBOX) list.filter { isInbox(File(it.path).parent ?: "") }
                     else list.filter { File(it.path).parent == ad }
                 }
-                SubMode.All -> {}
+                SubMode.All, SubMode.Timeline -> {}
             }
         }
         if (section != Section.Browse && query.isNotBlank()) {
             val q = query.trim().lowercase()
             list = list.filter { it.name.lowercase().contains(q) }
+        }
+        if (hasSub(section) && subMode == SubMode.Timeline) {
+            val months = list.groupBy { Fs.monthKey(it.modified) }
+            return months.keys.sortedDescending().flatMap { k ->
+                val g = months.getValue(k)
+                listOf<Row>(Row.Header(Fs.monthLabel(k), g.map { it.path })) +
+                    Fs.sorted(g, sortBy, asc, false).map { Row.Entry(it) }
+            }
         }
         if (section == Section.Recent) {
             val groups = list.groupBy { Fs.epochDay(it.modified) }
@@ -145,7 +172,8 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
                     Fs.sorted(g, sortBy, asc, false).map { Row.Entry(it) }
             }
         }
-        return Fs.sorted(list, sortBy, asc, section == Section.Browse).map { Row.Entry(it) }
+        return Fs.sorted(list, sortBy, asc, section == Section.Browse || section == Section.Favorites || section == Section.Locked)
+            .map { Row.Entry(it) }
     }
 
     private fun albumRows(list: List<FileItem>): List<Row> {
@@ -172,9 +200,26 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         return out
     }
 
-    private fun suggestKeep(files: List<FileItem>): FileItem =
+    private fun tagRows(): List<Row> {
+        val byPath = items.associateBy { it.path }
+        val infos = ArrayList<AlbumInfo>()
+        for ((tag, set) in marks.tags) {
+            val fs = set.mapNotNull { byPath[it] }
+            if (fs.isEmpty()) continue
+            val cover = fs.maxByOrNull { it.modified }!!
+            var sz = 0L
+            for (f in fs) sz += f.size
+            infos.add(AlbumInfo("tag:$tag", tag, fs.size, sz, cover.modified, cover.path, false))
+        }
+        return infos.sortedBy { it.name.lowercase() }.map { Row.Album(it) }
+    }
+
+    private fun suggestKeep(files: List<FileItem>, tagged: Set<String>): FileItem =
         files.sortedWith(
             compareBy<FileItem>(
+                { if (marks.isLocked(it.path)) 0 else 1 },
+                { if (it.path in marks.favorites) 0 else 1 },
+                { if (it.path in tagged) 0 else 1 },
                 { if (isInbox(File(it.path).parent ?: "")) 1 else 0 },
                 { if (Dupes.normName(it.name) == it.name.lowercase()) 0 else 1 },
                 { it.modified }
@@ -183,15 +228,17 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun dupRows(): List<Row> {
         val groups = dupResults[section].orEmpty()
+        val tagged = HashSet<String>()
+        for (st in marks.tags.values) tagged.addAll(st)
         return groups.flatMapIndexed { i, g ->
-            val keep = suggestKeep(g.files)
+            val keep = suggestKeep(g.files, tagged)
             val ordered = listOf(keep) + g.files.filter { it.path != keep.path }
             val label = if (g.verified) {
                 "${g.files.size} identische Dateien · ${Fs.formatSize(g.size)} je Datei · Inhalt geprüft"
             } else {
                 "${g.files.size} mögliche Duplikate · ${Fs.formatSize(g.size)} · gleicher Name + Größe"
             }
-            listOf<Row>(Row.DupHeader("g$i", label, ordered.drop(1).map { it.path })) +
+            listOf<Row>(Row.DupHeader("g$i", label, ordered.drop(1).map { it.path }.filter { !marks.isLocked(it) })) +
                 ordered.map { Row.Entry(it) }
         }
     }
@@ -211,10 +258,16 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     // ---------- Laden ----------
 
     private fun defaultSort(s: Section): Pair<SortBy, Boolean> = when (s) {
-        Section.Recent, Section.Images, Section.Videos, Section.Trash -> SortBy.Date to false
-        Section.Other -> SortBy.Size to false
+        Section.Recent, Section.Images, Section.Videos, Section.Trash, Section.Downloads, Section.Screenshots,
+        Section.Archives, Section.Recordings -> SortBy.Date to false
+        Section.Other, Section.Largest -> SortBy.Size to false
         else -> SortBy.Name to true
     }
+
+    private fun defaultSubMode(s: Section): SubMode = if (s == Section.Messenger) SubMode.Albums else SubMode.All
+
+    private fun pathItems(paths: Collection<String>): List<FileItem> =
+        paths.map { File(it) }.filter { it.exists() }.map { Fs.itemOf(it) }
 
     fun onResume() {
         roots = Fs.roots(app)
@@ -248,6 +301,10 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
                             else Fs.search(d, q, hidden) { isActive }
                         }
                         Section.Trash -> Trash.list(rs)
+                        Section.More -> emptyList<FileItem>()
+                        Section.Favorites -> pathItems(marks.favorites)
+                        Section.Locked -> pathItems(marks.locked)
+                        Section.Collections -> pathItems(marks.tags.values.flatten().distinct())
                         else -> Fs.media(app, s)
                     }
                 }
@@ -268,7 +325,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         val (by, a) = sortMemory[s] ?: defaultSort(s)
         sortBy = by
         asc = a
-        subMode = subModeMemory[s] ?: SubMode.All
+        subMode = subModeMemory[s] ?: defaultSubMode(s)
         albumDir = null
         selected = emptySet()
         query = ""
@@ -299,7 +356,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun canBack(): Boolean =
         selected.isNotEmpty() || searching || albumDir != null || canGoUp() ||
-            section == Section.Other || section == Section.Trash
+            !section.inTabs
 
     fun back() {
         when {
@@ -309,6 +366,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
             canGoUp() -> openDir(dir!!.parentFile!!)
             section == Section.Other -> selectSection(Section.Storage)
             section == Section.Trash -> selectSection(Section.Browse)
+            !section.inTabs -> selectSection(Section.More)
         }
     }
 
@@ -430,6 +488,49 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearSelection() { selected = emptySet() }
 
+    // ---------- Favoriten, Sperren, Sammlungen ----------
+
+    private fun toast(msg: String) {
+        Toast.makeText(app, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    fun toggleFavorites(paths: List<String>) {
+        val add = !paths.all { it in marks.favorites }
+        marks.toggleFavorites(paths)
+        selected = emptySet()
+        toast(if (add) "Zu Favoriten hinzugefügt" else "Aus Favoriten entfernt")
+        if (section == Section.Favorites) reload()
+    }
+
+    fun toggleLock(paths: List<String>) {
+        val add = !paths.all { it in marks.locked }
+        marks.toggleLock(paths)
+        selected = emptySet()
+        toast(if (add) "Gesperrt: wird beim Löschen übersprungen" else "Entsperrt")
+        if (section == Section.Locked) reload()
+    }
+
+    fun addToTag(tag: String, paths: List<String>) {
+        val t = tag.trim()
+        if (t.isEmpty()) return
+        marks.addToTag(t, paths)
+        selected = emptySet()
+        toast("Zu Sammlung „$t“ hinzugefügt")
+        if (section == Section.Collections) reload()
+    }
+
+    fun removeFromTag(paths: List<String>) {
+        val tag = albumDir?.removePrefix("tag:") ?: return
+        marks.removeFromTag(tag, paths)
+        selected = emptySet()
+        reload()
+    }
+
+    fun deleteTag(tag: String) {
+        marks.deleteTag(tag)
+        albumDir = null
+    }
+
     // ---------- Operationen ----------
 
     private fun launchOp(block: () -> String) {
@@ -458,11 +559,14 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Verschiebt in den Papierkorb (30 Tage wiederherstellbar). */
     fun trash(paths: List<String>) = launchOp {
-        val files = paths.map { File(it) }
+        val allowed = paths.filter { !marks.isProtected(it) }
+        val skipped = paths.size - allowed.size
+        val files = allowed.map { File(it) }
         val old = files.flatMap { Fs.collect(it) }.map { it.path }
         val n = Trash.moveToTrash(roots, files)
         Fs.scan(app, old)
-        "$n von ${files.size} in den Papierkorb verschoben"
+        "$n von ${files.size} in den Papierkorb verschoben" +
+            (if (skipped > 0) " · $skipped gesperrt übersprungen" else "")
     }
 
     /** Löscht endgültig (im Papierkorb-Reiter aus dem Papierkorb, sonst direkt). */
@@ -471,12 +575,14 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
             val n = Trash.deleteForever(roots, paths.toSet())
             "$n endgültig gelöscht"
         } else {
-            val files = paths.map { File(it) }
+            val allowed = paths.filter { !marks.isProtected(it) }
+            val skipped = paths.size - allowed.size
+            val files = allowed.map { File(it) }
             val old = files.flatMap { Fs.collect(it) }.map { it.path }
             var ok = 0
             for (f in files) if (f.deleteRecursively()) ok++
             Fs.scan(app, old)
-            "$ok von ${files.size} gelöscht"
+            "$ok von ${files.size} gelöscht" + (if (skipped > 0) " · $skipped gesperrt übersprungen" else "")
         }
     }
 
@@ -504,6 +610,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 val old = Fs.collect(src).map { it.path }
                 if (src.renameTo(dst)) {
+                    marks.remap(src.path, dst.path)
                     Fs.scan(app, old + Fs.collect(dst).map { it.path })
                     "Umbenannt"
                 } else "Umbenennen fehlgeschlagen"
@@ -544,6 +651,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
             } else src.copyRecursively(dst)
             if (success) {
                 ok++
+                if (move) marks.remap(src.path, dst.path)
                 Fs.scan(app, old + Fs.collect(dst).map { it.path })
             }
         }
