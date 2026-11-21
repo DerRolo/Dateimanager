@@ -166,9 +166,20 @@ fun CloudScreen(vm: FmViewModel, onAddRoot: () -> Unit, onUpload: () -> Unit) {
         ) {
             Text("Cloud-Speicher", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Verbinde OneDrive, Google Drive oder Dropbox. Im Systemfenster öffnest du links oben das Menü " +
-                    "und wählst den Dienst. Die jeweilige App muss installiert und angemeldet sein.",
+                "So verbindest du Google Drive:\n" +
+                    "1. Tippe unten auf „Cloud-Speicher hinzufügen“.\n" +
+                    "2. Öffne im Systemfenster links oben das Menü (☰) und wähle dein Drive-Konto.\n" +
+                    "3. Gehe in den Ordner „Meine Ablage“. Die oberste Ebene lässt Android nicht zu.\n" +
+                    "4. Tippe unten auf „Diesen Ordner verwenden“ und gib der Verbindung einen Namen.",
                 style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "Mehrere Konten: jedes einzeln hinzufügen und eigenen Namen vergeben. " +
+                    "Dropbox erscheint im Systemfenster, wenn die Dropbox-App installiert ist. " +
+                    "OneDrive erscheint nur, wenn die OneDrive-App diese Schnittstelle anbietet. " +
+                    "Auf deinem Handy ist das nicht der Fall, darum kann ich OneDrive so nicht anbinden.",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             vm.cloudRoots.forEach { r ->
@@ -256,6 +267,13 @@ fun CloudScreen(vm: FmViewModel, onAddRoot: () -> Unit, onUpload: () -> Unit) {
                     }
                 }
             }
+        }
+    }
+
+    val pend = vm.cloudPending
+    if (pend != null) {
+        NameDialog("Name der Verbindung", pend.second, "Speichern", false, { vm.cloudPending = null }) {
+            vm.confirmCloudRoot(it)
         }
     }
 

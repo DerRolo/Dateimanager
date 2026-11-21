@@ -48,6 +48,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Smartphone
@@ -356,6 +359,18 @@ fun ConfirmDialog(title: String, text: String, confirm: String, onOk: () -> Unit
 }
 
 @Composable
+fun OptionRow(icon: ImageVector, text: String, tint: Color? = null, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, null, tint = tint ?: MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.size(16.dp))
+        Text(text, color = tint ?: MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+@Composable
 fun AlbumOptionsDialog(
     info: AlbumInfo,
     locked: Boolean,
@@ -367,24 +382,32 @@ fun AlbumOptionsDialog(
     onToggleLock: () -> Unit,
     onToggleFav: () -> Unit,
     onToggleInbox: () -> Unit,
-    onShowInFiles: () -> Unit
+    onShowInFiles: () -> Unit,
+    onDelete: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(info.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                TextButton(onClick = onOpen) { Text("Öffnen") }
-                TextButton(onClick = onRename) { Text("Ordner umbenennen") }
-                TextButton(onClick = onMove) { Text("Ordner verschieben …") }
-                TextButton(onClick = onToggleLock) {
-                    Text(if (locked) "Ordner entsperren" else "Ordner sperren (alles darin vor Löschen schützen)")
-                }
-                TextButton(onClick = onToggleFav) { Text(if (favorite) "Aus Favoriten entfernen" else "Zu Favoriten") }
-                TextButton(onClick = onShowInFiles) { Text("Ordner im Reiter „Dateien“ ansehen") }
-                TextButton(onClick = onToggleInbox) {
-                    Text(if (info.inbox) "Als Album behandeln" else "Zu „Ohne Album“ zählen")
-                }
+                OptionRow(Icons.Default.Folder, "Öffnen", null, onOpen)
+                OptionRow(Icons.Default.Edit, "Umbenennen", null, onRename)
+                OptionRow(Icons.AutoMirrored.Filled.ArrowForward, "Verschieben …", null, onMove)
+                OptionRow(
+                    Icons.Default.Lock,
+                    if (locked) "Entsperren" else "Sperren – alles darin vor dem Löschen schützen",
+                    null,
+                    onToggleLock
+                )
+                OptionRow(Icons.Default.Star, if (favorite) "Aus Favoriten entfernen" else "Zu Favoriten", null, onToggleFav)
+                OptionRow(Icons.Default.FolderOpen, "Im Reiter „Dateien“ ansehen", null, onShowInFiles)
+                OptionRow(
+                    Icons.Default.Bookmark,
+                    if (info.inbox) "Als Album behandeln" else "Zu „Ohne Album“ zählen",
+                    null,
+                    onToggleInbox
+                )
+                OptionRow(Icons.Default.Delete, "Löschen (in den Papierkorb)", Color(0xFFE53935), onDelete)
                 Text(
                     if (info.inbox) {
                         "Dieser Ordner zählt als „Ohne Album“ (typisch: Kamera, Screenshots, Downloads, WhatsApp). " +
@@ -395,7 +418,7 @@ fun AlbumOptionsDialog(
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
                 )
             }
         },

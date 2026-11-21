@@ -97,6 +97,8 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     var cloudPath by mutableStateOf<List<CloudNode>>(emptyList())
     var cloudItems by mutableStateOf<List<CloudItem>>(emptyList())
     var cloudBusy by mutableStateOf(false)
+    var cloudPending by mutableStateOf<Pair<String, String>?>(null)
+    val scrollMemory = HashMap<String, Pair<Int, Int>>()
 
     private var job: Job? = null
     private var dupJob: Job? = null
@@ -644,10 +646,24 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) {
         }
         viewModelScope.launch {
-            val label = withContext(Dispatchers.IO) { CloudFs.rootName(app, uri) }
-            cloudRoots = cloudRoots.filter { it.first != uri.toString() } + Pair(uri.toString(), label)
-            saveCloud()
+            val name = withContext(Dispatchers.IO) { CloudFs.rootName(app, uri) }
+            val a = uri.authority ?: ""
+            val provider = when {
+                a.contains("docs", true) -> "Google Drive"
+                a.contains("dropbox", true) -> "Dropbox"
+                a.contains("skydrive", true) || a.contains("onedrive", true) || a.contains("microsoft", true) -> "OneDrive"
+                else -> "Cloud"
+            }
+            cloudPending = Pair(uri.toString(), "$provider – $name")
         }
+    }
+
+    fun confirmCloudRoot(label: String) {
+        val p = cloudPending ?: return
+        val l = label.trim().ifEmpty { p.second }
+        cloudRoots = cloudRoots.filter { it.first != p.first } + Pair(p.first, l)
+        saveCloud()
+        cloudPending = null
     }
 
     fun removeCloudRoot(entry: Pair<String, String>) {
@@ -876,9 +892,17 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setClip(move: Boolean) {
-        clip = Clip(selected.toList(), move)
+        val paths = selected.toList()
+        clip = Clip(paths, move)
         selected = emptySet()
+        goToFolderOf(paths)
+    }
+
+    /** Wechselt in den Dateien-Reiter und öffnet den Ordner, in dem die Auswahl liegt. */
+    private fun goToFolderOf(paths: List<String>) {
+        val start = paths.firstOrNull()?.let { File(it).parentFile }
         if (section != Section.Browse) selectSection(Section.Browse)
+        if (start != null && start.isDirectory) openDir(start)
     }
 
     fun cancelClip() { clip = null }
@@ -887,7 +911,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     fun setClipPaths(paths: List<String>, move: Boolean) {
         clip = Clip(paths, move)
         selected = emptySet()
-        if (section != Section.Browse) selectSection(Section.Browse)
+        goToFolderOf(paths)
     }
 
     private fun transfer(paths: List<String>, target: File, move: Boolean): String {

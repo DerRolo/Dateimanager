@@ -23,7 +23,17 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GridView
@@ -55,6 +65,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -113,9 +124,30 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
         vm.cloudUpload(uris)
     }
 
-    LaunchedEffect(vm.section, vm.dir, vm.albumDir, vm.subMode) {
-        listState.scrollToItem(0)
-        gridState.scrollToItem(0)
+    // Scrollposition pro Ansicht merken, damit man beim Zurückgehen wieder an derselben Stelle ist
+    val viewKey = vm.section.name + "|" + vm.dir?.path + "|" + vm.albumDir + "|" + vm.subMode.name + "|" +
+        vm.viewMode.name + "|" + vm.query.trim()
+    var restoredKey by remember { mutableStateOf("") }
+    LaunchedEffect(viewKey, vm.loading) {
+        if (!vm.loading && restoredKey != viewKey) {
+            val saved = vm.scrollMemory[viewKey]
+            val idx = saved?.first ?: 0
+            val off = saved?.second ?: 0
+            listState.scrollToItem(idx, off)
+            gridState.scrollToItem(idx, off)
+            restoredKey = viewKey
+        }
+    }
+    LaunchedEffect(viewKey) {
+        snapshotFlow {
+            if (vm.viewMode == ViewMode.List) {
+                Pair(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+            } else {
+                Pair(gridState.firstVisibleItemIndex, gridState.firstVisibleItemScrollOffset)
+            }
+        }.collect { p ->
+            if (restoredKey == viewKey) vm.scrollMemory[viewKey] = p
+        }
     }
 
     BackHandler(enabled = vm.canBack()) { vm.back() }
@@ -146,56 +178,56 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                 }
                             }
                             IconButton(onClick = { dialog = Dlg.Delete(selectedItems) }) {
-                                Icon(Icons.Default.Delete, "Löschen")
+                                Icon(Icons.Default.Delete, "Löschen", tint = Color(0xFFE53935))
                             }
                             var menu by remember { mutableStateOf(false) }
                             Box {
                                 IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Mehr") }
                                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                    DropdownMenuItem(text = { Text("Alles auswählen") }, onClick = {
+                                    DropdownMenuItem(text = { Text("Alles auswählen") }, leadingIcon = { Icon(Icons.Default.CheckCircle, null) }, onClick = {
                                         vm.selectAll(entries.map { it.path }); menu = false
                                     })
                                     if (inTrash) {
-                                        DropdownMenuItem(text = { Text("Wiederherstellen") }, onClick = {
+                                        DropdownMenuItem(text = { Text("Wiederherstellen") }, leadingIcon = { Icon(Icons.Default.Refresh, null) }, onClick = {
                                             vm.restore(selectedItems.map { it.path }); menu = false
                                         })
                                     } else if (vm.section == Section.Vault) {
-                                        DropdownMenuItem(text = { Text("Aus Tresor holen") }, onClick = {
+                                        DropdownMenuItem(text = { Text("Aus Tresor holen") }, leadingIcon = { Icon(Icons.Default.Security, null) }, onClick = {
                                             vm.bringOutOfVault(selectedItems.map { it.path }); menu = false
                                         })
                                     } else {
-                                        DropdownMenuItem(text = { Text("Kopieren") }, onClick = {
+                                        DropdownMenuItem(text = { Text("Kopieren") }, leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, onClick = {
                                             vm.setClip(false); menu = false
                                         })
-                                        DropdownMenuItem(text = { Text("Verschieben") }, onClick = {
+                                        DropdownMenuItem(text = { Text("Verschieben") }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowForward, null) }, onClick = {
                                             vm.setClip(true); menu = false
                                         })
                                         if (hasSub) {
-                                            DropdownMenuItem(text = { Text("In Album verschieben …") }, onClick = {
+                                            DropdownMenuItem(text = { Text("In Album verschieben …") }, leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, onClick = {
                                                 dialog = Dlg.MoveToAlbum(selectedItems.map { it.path }); menu = false
                                             })
                                         }
                                         val allFav = selectedItems.all { it.path in vm.marks.favorites }
-                                        DropdownMenuItem(text = { Text(if (allFav) "Aus Favoriten entfernen" else "Zu Favoriten") }, onClick = {
+                                        DropdownMenuItem(text = { Text(if (allFav) "Aus Favoriten entfernen" else "Zu Favoriten") }, leadingIcon = { Icon(Icons.Default.Star, null) }, onClick = {
                                             vm.toggleFavorites(selectedItems.map { it.path }); menu = false
                                         })
                                         val allLocked = selectedItems.all { it.path in vm.marks.locked }
-                                        DropdownMenuItem(text = { Text(if (allLocked) "Entsperren" else "Sperren (vor Löschen schützen)") }, onClick = {
+                                        DropdownMenuItem(text = { Text(if (allLocked) "Entsperren" else "Sperren (vor Löschen schützen)") }, leadingIcon = { Icon(Icons.Default.Lock, null) }, onClick = {
                                             vm.toggleLock(selectedItems.map { it.path }); menu = false
                                         })
-                                        DropdownMenuItem(text = { Text("In Tresor verschieben") }, onClick = {
+                                        DropdownMenuItem(text = { Text("In Tresor verschieben") }, leadingIcon = { Icon(Icons.Default.Security, null) }, onClick = {
                                             vm.moveToVault(selectedItems.map { it.path }); menu = false
                                         })
-                                        DropdownMenuItem(text = { Text("Zu Sammlung hinzufügen …") }, onClick = {
+                                        DropdownMenuItem(text = { Text("Zu Sammlung hinzufügen …") }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = {
                                             dialog = Dlg.AddToTag(selectedItems.map { it.path }); menu = false
                                         })
                                         if (vm.section == Section.Collections && vm.albumDir != null) {
-                                            DropdownMenuItem(text = { Text("Aus Sammlung entfernen") }, onClick = {
+                                            DropdownMenuItem(text = { Text("Aus Sammlung entfernen") }, leadingIcon = { Icon(Icons.Default.Close, null) }, onClick = {
                                                 vm.removeFromTag(selectedItems.map { it.path }); menu = false
                                             })
                                         }
                                         if (selectedItems.size == 1) {
-                                            DropdownMenuItem(text = { Text("Umbenennen") }, onClick = {
+                                            DropdownMenuItem(text = { Text("Umbenennen") }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = {
                                                 dialog = Dlg.Rename(selectedItems[0]); menu = false
                                             })
                                         }
@@ -352,7 +384,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                 Surface(tonalElevation = 3.dp, shadowElevation = 8.dp) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "${c.paths.size} Element(e) zum ${if (c.move) "Verschieben" else "Kopieren"}",
+                            "${c.paths.size} Element(e) zum ${if (c.move) "Verschieben" else "Kopieren"}: Zielordner öffnen und „Hier einfügen“ tippen",
                             Modifier.weight(1f)
                         )
                         TextButton(onClick = { vm.cancelClip() }) { Text("Abbrechen") }
@@ -557,7 +589,10 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             onToggleLock = { vm.toggleLock(listOf(d.info.path)); dialog = null },
             onToggleFav = { vm.toggleFavorites(listOf(d.info.path)); dialog = null },
             onToggleInbox = { vm.markAlbum(d.info.path, !d.info.inbox); dialog = null },
-            onShowInFiles = { vm.showInFiles(d.info.path); dialog = null }
+            onShowInFiles = { vm.showInFiles(d.info.path); dialog = null },
+            onDelete = {
+                dialog = Dlg.Delete(listOf(FileItem(d.info.path, File(d.info.path).name, true, 0L, 0L)))
+            }
         )
         is Dlg.MoveToAlbum -> AlbumPickerDialog(
             albums = vm.albumInfos.filter { !it.inbox },
