@@ -82,6 +82,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     val marks = Marks(prefs)
     var docFilter by mutableStateOf(DocFilter.All)
     var otherFilter by mutableStateOf(OtherFilter.All)
+    var recentType by mutableStateOf(TypeFilter.All)
     var trashDays by mutableStateOf(prefs.getInt("trash_days", 30))
     private var otherBack = Section.Storage
     var cleanupFilter by mutableStateOf(CleanupFilter.EmptyFolders)
@@ -165,6 +166,9 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         var list = items
         if (section == Section.Docs && docFilter != DocFilter.All) list = list.filter { docFilter.matches(it.ext) }
         if (section == Section.Other && otherFilter != OtherFilter.All) list = list.filter { otherFilter.matches(it) }
+        if ((section == Section.Recent || section == Section.Downloads) && recentType != TypeFilter.All) {
+            list = list.filter { recentType.matches(it) }
+        }
         if (section == Section.Collections) {
             val ad = albumDir
             if (ad == null) return tagRows()
@@ -792,6 +796,42 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteTag(tag: String) {
         marks.deleteTag(tag)
         albumDir = null
+    }
+
+    // ---------- Wischgesten ----------
+
+    /** Wischen nach rechts: Favorit umschalten. Gibt zurück, ob die Datei vorher schon Favorit war. */
+    fun swipeFavorite(path: String): Boolean {
+        val was = path in marks.favorites
+        marks.toggleFavorites(listOf(path))
+        if (section == Section.Favorites) reload()
+        return was
+    }
+
+    /** Wischen nach links: in den Papierkorb. [done] bekommt die Papierkorb-Pfade für "Rückgängig". */
+    fun swipeTrash(path: String, done: (List<String>) -> Unit) {
+        if (marks.isProtected(path)) {
+            toast("Gesperrt – wird nicht in den Papierkorb verschoben")
+            return
+        }
+        viewModelScope.launch {
+            val trashed = withContext(Dispatchers.IO) {
+                val f = File(path)
+                val old = Fs.collect(f).map { it.path }
+                val r = Trash.moveToTrashGetPaths(roots, listOf(f))
+                Fs.scan(app, old)
+                r
+            }
+            reload()
+            if (trashed.isNotEmpty()) done(trashed) else toast("Konnte nicht in den Papierkorb verschieben")
+        }
+    }
+
+    fun undoTrash(trashPaths: List<String>) = launchOp {
+        val restored = ArrayList<String>()
+        val n = Trash.restore(roots, trashPaths.toSet(), restored)
+        Fs.scan(app, restored)
+        "$n wiederhergestellt"
     }
 
     // ---------- Operationen ----------

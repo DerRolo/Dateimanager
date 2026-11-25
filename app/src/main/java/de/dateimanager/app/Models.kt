@@ -124,6 +124,36 @@ enum class OtherFilter(val label: String) {
     }
 }
 
+enum class TypeFilter(val label: String) {
+    All("Alle Typen"), Images("Bilder"), Videos("Videos"), Audio("Audio"), Pdf("PDF"),
+    Office("Office"), Text("Text & Code"), Archives("Archive & Apps"), Other("Sonstige");
+
+    fun matches(item: FileItem): Boolean = this == All || classify(item.ext) == this
+
+    companion object {
+        private val IMG = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "avif")
+        private val VID = setOf("mp4", "mkv", "webm", "3gp", "avi", "mov", "m4v")
+        private val AUD = setOf("mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "amr", "wma")
+        private val OFF = setOf("doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp")
+        private val TXT = setOf(
+            "txt", "md", "tex", "csv", "tsv", "log", "json", "xml", "rtf", "epub", "py", "java", "kt", "c", "cpp",
+            "h", "js", "css", "html", "sh", "bib", "ini", "yml", "yaml"
+        )
+        private val ARC = setOf("zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "iso", "apk", "xapk", "apks", "aab")
+
+        fun classify(ext: String): TypeFilter = when (ext) {
+            in IMG -> Images
+            in VID -> Videos
+            in AUD -> Audio
+            "pdf" -> Pdf
+            in OFF -> Office
+            in TXT -> Text
+            in ARC -> Archives
+            else -> Other
+        }
+    }
+}
+
 enum class Kind { Folder, Image, Video, Audio, Pdf, Archive, Apk, Text, Other }
 
 fun FileItem.kind(): Kind = if (isDir) Kind.Folder else when (ext) {

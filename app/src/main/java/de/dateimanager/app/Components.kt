@@ -83,6 +83,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -1328,6 +1331,105 @@ fun OtherChips(vm: FmViewModel) {
     ) {
         OtherFilter.values().forEach { f ->
             FilterChip(selected = vm.otherFilter == f, onClick = { vm.otherFilter = f }, label = { Text(f.label) })
+        }
+    }
+}
+
+// ---------- Wischen in Listen ----------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SwipeRow(
+    enabled: Boolean,
+    isFav: Boolean,
+    onFavorite: () -> Unit,
+    onTrash: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val favNow by rememberUpdatedState(onFavorite)
+    val trashNow by rememberUpdatedState(onTrash)
+    val state = rememberSwipeToDismissBoxState(confirmValueChange = { v ->
+        if (v == SwipeToDismissBoxValue.StartToEnd) {
+            favNow()
+        } else if (v == SwipeToDismissBoxValue.EndToStart) {
+            trashNow()
+        }
+        false
+    })
+    SwipeToDismissBox(
+        state = state,
+        enableDismissFromStartToEnd = enabled,
+        enableDismissFromEndToStart = enabled,
+        backgroundContent = {
+            val d = state.dismissDirection
+            val bg = when (d) {
+                SwipeToDismissBoxValue.StartToEnd -> Color(0xFFFFB300)
+                SwipeToDismissBoxValue.EndToStart -> Color(0xFFE53935)
+                else -> Color.Transparent
+            }
+            Box(
+                Modifier.fillMaxSize().background(bg).padding(horizontal = 24.dp),
+                contentAlignment = if (d == SwipeToDismissBoxValue.EndToStart) Alignment.CenterEnd else Alignment.CenterStart
+            ) {
+                if (d == SwipeToDismissBoxValue.StartToEnd) {
+                    Icon(
+                        Icons.Default.Star,
+                        if (isFav) "Aus Favoriten entfernen" else "Zu Favoriten",
+                        tint = Color.White
+                    )
+                } else if (d == SwipeToDismissBoxValue.EndToStart) {
+                    Icon(Icons.Default.Delete, "In den Papierkorb", tint = Color.White)
+                }
+            }
+        },
+        content = { Box(Modifier.background(MaterialTheme.colorScheme.background)) { content() } }
+    )
+}
+
+// ---------- Kopfbereich der Liste (scrollt mit) ----------
+
+fun headerNeeded(vm: FmViewModel): Boolean {
+    val s = vm.section
+    return (vm.hasSub(s) && !vm.searching) || s == Section.Recent || s == Section.Downloads ||
+        s == Section.Search || s == Section.Other || s == Section.Cleanup || s == Section.Trash
+}
+
+@Composable
+fun TypeFilterBar(vm: FmViewModel) {
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        AdvDropdown(
+            if (vm.recentType == TypeFilter.All) "Dateityp" else "Dateityp: " + vm.recentType.label,
+            TypeFilter.values().map { it.label }
+        ) { i -> vm.recentType = TypeFilter.values()[i] }
+        if (vm.recentType != TypeFilter.All) {
+            FilterChip(selected = true, onClick = { vm.recentType = TypeFilter.All }, label = { Text("Filter aufheben  ✕") })
+        }
+    }
+}
+
+@Composable
+fun ListHeader(vm: FmViewModel) {
+    val s = vm.section
+    Column(Modifier.fillMaxWidth()) {
+        if (vm.hasSub(s) && !vm.searching) {
+            SubModeChips(vm)
+            if (s == Section.Docs && vm.subMode == SubMode.All) DocFilterChips(vm)
+        }
+        if (s == Section.Recent || s == Section.Downloads) TypeFilterBar(vm)
+        if (s == Section.Search) AdvancedSearchBar(vm)
+        if (s == Section.Other) OtherChips(vm)
+        if (s == Section.Cleanup) CleanupChips(vm)
+        if (s == Section.Trash) {
+            Text(
+                if (vm.trashDays > 0) "Gelöschtes wird nach ${vm.trashDays} Tagen automatisch entfernt (beim Öffnen der App). Einstellen über ⋮."
+                else "Automatisches Leeren ist aus. Einstellen über ⋮.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+            )
         }
     }
 }

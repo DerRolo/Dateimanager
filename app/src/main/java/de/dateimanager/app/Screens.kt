@@ -51,6 +51,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -110,13 +114,24 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
     val special = !vm.section.inTabs
     val hasSub = vm.hasSub(vm.section)
     val dupMode = hasSub && vm.subMode == SubMode.Dupes
+    val headerOn = headerNeeded(vm)
+    val swipeOn = !selMode && !inTrash && vm.section != Section.Vault
     val tabs = remember { Section.values().filter { it.inTabs } }
     var dialog by remember { mutableStateOf<Dlg?>(null) }
     var pdfPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var docPath by rememberSaveable { mutableStateOf<String?>(null) }
     val loader = remember { ImageLoader.Builder(ctx).components { add(VideoFrameDecoder.Factory()) }.build() }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    fun showUndo(msg: String, onUndo: () -> Unit) {
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val r = snackbar.showSnackbar(msg, actionLabel = "Rückgängig", duration = SnackbarDuration.Short)
+            if (r == SnackbarResult.ActionPerformed) onUndo()
+        }
+    }
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.addCloudRoot(uri)
     }
@@ -126,7 +141,8 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
 
     // Scrollposition pro Ansicht merken, damit man beim Zurückgehen wieder an derselben Stelle ist
     val viewKey = vm.section.name + "|" + vm.dir?.path + "|" + vm.albumDir + "|" + vm.subMode.name + "|" +
-        vm.viewMode.name + "|" + vm.query.trim()
+        vm.viewMode.name + "|" + vm.query.trim() + "|" +
+        vm.recentType.name + vm.docFilter.name + vm.otherFilter.name
     var restoredKey by remember { mutableStateOf("") }
     LaunchedEffect(viewKey, vm.loading) {
         if (!vm.loading && restoredKey != viewKey) {
@@ -158,11 +174,13 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             item.isDir && vm.section == Section.Browse -> vm.openDir(File(item.path))
             item.isDir -> vm.showInFiles(item.path)
             item.ext == "pdf" && vm.pdfQuick -> pdfPath = item.path
+            DocPreview.canPreview(item.ext) && vm.pdfQuick -> docPath = item.path
             else -> Fs.open(ctx, File(item.path))
         }
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             Column {
                 when {
@@ -338,7 +356,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                             })
                                         } else {
                                             DropdownMenuItem(
-                                                text = { Text(if (vm.pdfQuick) "PDF-Schnellansicht: an" else "PDF-Schnellansicht: aus") },
+                                                text = { Text(if (vm.pdfQuick) "Schnellansicht (PDF, Office, Text): an" else "Schnellansicht (PDF, Office, Text): aus") },
                                                 onClick = { vm.togglePdfQuick(); more = false }
                                             )
                                             DropdownMenuItem(
@@ -364,10 +382,6 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                             Tab(selected = vm.section == s, onClick = { vm.selectSection(s) }, text = { Text(s.title) })
                         }
                     }
-                }
-                if (!selMode && hasSub && !vm.searching) {
-                    SubModeChips(vm)
-                    if (vm.section == Section.Docs && vm.subMode == SubMode.All) DocFilterChips(vm)
                 }
             }
         },
@@ -406,20 +420,9 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             } else if (vm.section == Section.Cloud) {
                 CloudScreen(vm, { treeLauncher.launch(null) }, { pickLauncher.launch(arrayOf("*/*")) })
             } else {
-                if (vm.section == Section.Search) AdvancedSearchBar(vm)
-                if (vm.section == Section.Other) OtherChips(vm)
-                if (inTrash) {
-                    Text(
-                        if (vm.trashDays > 0) "Gelöschtes wird nach ${vm.trashDays} Tagen automatisch entfernt (beim Öffnen der App). Einstellen über ⋮."
-                        else "Automatisches Leeren ist aus. Einstellen über ⋮.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                    )
-                }
-                if (vm.section == Section.Cleanup) CleanupChips(vm)
                 if (dupMode) DupBar(vm)
                 if (rows.isEmpty()) {
+                    if (headerOn) ListHeader(vm)
                     if (!vm.loading && !dupMode) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
@@ -439,9 +442,13 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                     }
                 } else {
                     val showFolder = vm.section != Section.Browse || vm.query.isNotBlank()
+                    val hc = if (headerOn) 1 else 0
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         if (vm.viewMode == ViewMode.List) {
                             LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                                if (headerOn) {
+                                    item(key = "list_header") { ListHeader(vm) }
+                                }
                                 items(rows, key = { it.key }) { row ->
                                     when (row) {
                                         is Row.Header -> GroupHeader(
@@ -470,7 +477,22 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                                 }
                                             }
                                         )
-                                        is Row.Entry -> FileRow(
+                                        is Row.Entry -> SwipeRow(
+                                            enabled = swipeOn && !listState.isScrollInProgress,
+                                            isFav = row.item.path in vm.marks.favorites,
+                                            onFavorite = {
+                                                val was = vm.swipeFavorite(row.item.path)
+                                                showUndo(if (was) "Aus Favoriten entfernt" else "Zu Favoriten hinzugefügt") {
+                                                    vm.swipeFavorite(row.item.path)
+                                                }
+                                            },
+                                            onTrash = {
+                                                vm.swipeTrash(row.item.path) { tp ->
+                                                    showUndo("In den Papierkorb verschoben") { vm.undoTrash(tp) }
+                                                }
+                                            }
+                                        ) {
+                                            FileRow(
                                             item = row.item,
                                             selected = row.item.path in vm.selected,
                                             showFolder = showFolder,
@@ -480,17 +502,18 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                             loader = loader,
                                             onClick = { onItemClick(row.item) },
                                             onLongClick = { vm.toggle(row.item.path) }
-                                        )
+                                            )
+                                        }
                                     }
                                 }
                             }
                             FastScroller(
                                 modifier = Modifier.align(Alignment.CenterEnd),
-                                total = rows.size,
+                                total = rows.size + hc,
                                 firstVisible = listState.firstVisibleItemIndex,
                                 visible = listState.layoutInfo.visibleItemsInfo.size,
                                 scrolling = listState.isScrollInProgress,
-                                label = { idx -> rowLabel(rows, idx, vm.sortBy) }
+                                label = { idx -> rowLabel(rows, idx - hc, vm.sortBy) }
                             ) { i -> scope.launch { listState.scrollToItem(i) } }
                         } else {
                             LazyVerticalGrid(
@@ -501,6 +524,9 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
+                                if (headerOn) {
+                                    item(key = "list_header", span = { GridItemSpan(maxLineSpan) }) { ListHeader(vm) }
+                                }
                                 items(
                                     rows,
                                     key = { it.key },
@@ -550,11 +576,11 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                             }
                             FastScroller(
                                 modifier = Modifier.align(Alignment.CenterEnd),
-                                total = rows.size,
+                                total = rows.size + hc,
                                 firstVisible = gridState.firstVisibleItemIndex,
                                 visible = gridState.layoutInfo.visibleItemsInfo.size,
                                 scrolling = gridState.isScrollInProgress,
-                                label = { idx -> rowLabel(rows, idx, vm.sortBy) }
+                                label = { idx -> rowLabel(rows, idx - hc, vm.sortBy) }
                             ) { i -> scope.launch { gridState.scrollToItem(i) } }
                         }
                     }
@@ -626,6 +652,15 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             onDismiss = { dialog = null }
         )
         null -> {}
+    }
+
+    val docp = docPath
+    if (docp != null) {
+        DocSheet(
+            path = docp,
+            onClose = { docPath = null },
+            onOpen = { Fs.open(ctx, File(docp)); docPath = null }
+        )
     }
 
     val pdf = pdfPath

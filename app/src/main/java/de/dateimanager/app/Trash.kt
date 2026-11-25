@@ -33,8 +33,9 @@ object Trash {
         File(d, INDEX).writeText(list.joinToString("\n") { it.id + "\t" + it.orig + "\t" + it.at })
     }
 
-    fun moveToTrash(roots: List<Root>, files: List<File>): Int {
-        var ok = 0
+    /** Verschiebt in den Papierkorb und gibt die neuen Pfade im Papierkorb zurück (für "Rückgängig"). */
+    fun moveToTrashGetPaths(roots: List<Root>, files: List<File>): List<String> {
+        val res = ArrayList<String>()
         for (root in roots) {
             val mine = files.filter { it.path.startsWith(root.dir.path + "/") }
             if (mine.isEmpty()) continue
@@ -46,13 +47,15 @@ object Trash {
                 val target = File(dir, id + "_" + f.name)
                 if (f.renameTo(target)) {
                     idx.add(Entry(id, f.path, System.currentTimeMillis()))
-                    ok++
+                    res.add(target.path)
                 }
             }
             writeIndex(root, idx)
         }
-        return ok
+        return res
     }
+
+    fun moveToTrash(roots: List<Root>, files: List<File>): Int = moveToTrashGetPaths(roots, files).size
 
     fun list(roots: List<Root>): List<FileItem> {
         val out = ArrayList<FileItem>()
