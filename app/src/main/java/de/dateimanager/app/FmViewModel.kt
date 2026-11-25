@@ -58,13 +58,13 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    var section by mutableStateOf(Section.Browse)
+    var section by mutableStateOf(Section.Recent)
     var roots by mutableStateOf<List<Root>>(emptyList())
     var dir by mutableStateOf<File?>(null)
     var items by mutableStateOf<List<FileItem>>(emptyList())
     var loading by mutableStateOf(false)
-    var sortBy by mutableStateOf(SortBy.Name)
-    var asc by mutableStateOf(true)
+    var sortBy by mutableStateOf(SortBy.Date)
+    var asc by mutableStateOf(false)
     var showHidden by mutableStateOf(false)
     var query by mutableStateOf("")
     var searching by mutableStateOf(false)
@@ -77,7 +77,7 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     var dupStatus by mutableStateOf("")
     var inboxSet by mutableStateOf(loadSet("inbox"))
     var albumSet by mutableStateOf(loadSet("albums"))
-    var viewMode by mutableStateOf(loadView(Section.Browse))
+    var viewMode by mutableStateOf(loadView(Section.Recent))
     var pdfQuick by mutableStateOf(prefs.getBoolean("pdf_quick", true))
     val marks = Marks(prefs)
     var docFilter by mutableStateOf(DocFilter.All)
@@ -388,6 +388,15 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openRoot(r: Root) = openDir(r.dir)
+
+    /** Wird aufgerufen, wenn eine andere App einen Ordner mit dem Dateimanager öffnen will. */
+    fun openExternalFolder(path: String) {
+        val f = File(path)
+        val target = if (f.isDirectory) f else f.parentFile
+        if (target == null || !target.isDirectory) return
+        selectSection(Section.Browse)
+        openDir(target)
+    }
 
     fun activeRoot(): Root? {
         val d = dir ?: return null
