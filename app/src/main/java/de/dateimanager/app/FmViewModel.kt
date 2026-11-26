@@ -80,6 +80,8 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     var viewMode by mutableStateOf(loadView(Section.Recent))
     var pdfQuick by mutableStateOf(prefs.getBoolean("pdf_quick", true))
     val marks = Marks(prefs)
+    val player = PlayerState(app)
+    var playInApp by mutableStateOf(prefs.getBoolean("play_in_app", true))
     var docFilter by mutableStateOf(DocFilter.All)
     var otherFilter by mutableStateOf(OtherFilter.All)
     var recentType by mutableStateOf(TypeFilter.All)
@@ -796,6 +798,16 @@ class FmViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteTag(tag: String) {
         marks.deleteTag(tag)
         albumDir = null
+    }
+
+    fun togglePlayInApp() {
+        playInApp = !playInApp
+        prefs.edit().putBoolean("play_in_app", playInApp).apply()
+    }
+
+    override fun onCleared() {
+        player.release()
+        super.onCleared()
     }
 
     // ---------- Wischgesten ----------

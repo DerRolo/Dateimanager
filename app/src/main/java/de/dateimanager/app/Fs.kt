@@ -365,7 +365,7 @@ object Fs {
         try {
             val i = Intent(Intent.ACTION_VIEW)
                 .setDataAndType(uriFor(ctx, f), mime(f))
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             ctx.startActivity(i)
         } catch (e: Exception) {
             Toast.makeText(ctx, "Keine App zum Öffnen gefunden", Toast.LENGTH_SHORT).show()

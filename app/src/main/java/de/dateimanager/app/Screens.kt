@@ -1,5 +1,8 @@
 package de.dateimanager.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -139,6 +142,20 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
     val pickLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         vm.cloudUpload(uris)
     }
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    var playerSheet by remember { mutableStateOf(false) }
+
+    fun startMedia(item: FileItem) {
+        val kind = item.kind()
+        val list = entries.filter { it.kind() == kind }.map { it.path }
+        val idx = list.indexOf(item.path).coerceAtLeast(0)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        vm.player.play(list, idx, kind == Kind.Video)
+    }
 
     // Scrollposition pro Ansicht merken, damit man beim Zurückgehen wieder an derselben Stelle ist
     val viewKey = vm.section.name + "|" + vm.dir?.path + "|" + vm.albumDir + "|" + vm.subMode.name + "|" +
@@ -174,6 +191,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             selMode -> vm.toggle(item.path)
             item.isDir && vm.section == Section.Browse -> vm.openDir(File(item.path))
             item.isDir -> vm.showInFiles(item.path)
+            vm.playInApp && (item.kind() == Kind.Audio || item.kind() == Kind.Video) -> startMedia(item)
             item.ext == "pdf" && vm.pdfQuick -> pdfPath = item.path
             DocPreview.canPreview(item.ext) && vm.pdfQuick -> docPath = item.path
             else -> Fs.open(ctx, File(item.path))
@@ -369,6 +387,10 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                                 onClick = { vm.togglePdfQuick(); more = false }
                                             )
                                             DropdownMenuItem(
+                                                text = { Text(if (vm.playInApp) "Musik & Videos in der App abspielen: an" else "Musik & Videos in der App abspielen: aus") },
+                                                onClick = { vm.togglePlayInApp(); more = false }
+                                            )
+                                            DropdownMenuItem(
                                                 text = { Text(if (vm.showHidden) "Versteckte Dateien ausblenden" else "Versteckte Dateien anzeigen") },
                                                 onClick = { vm.toggleHidden(); more = false }
                                             )
@@ -402,6 +424,10 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             }
         },
         bottomBar = {
+            Column {
+            if (vm.player.hasMedia && !vm.player.isVideo) {
+                MiniPlayer(vm.player) { playerSheet = true }
+            }
             val c = vm.clip
             if (c != null && vm.section == Section.Browse) {
                 Surface(tonalElevation = 3.dp, shadowElevation = 8.dp) {
@@ -414,6 +440,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                         Button(onClick = { vm.paste() }) { Text("Hier einfügen") }
                     }
                 }
+            }
             }
         }
     ) { pad ->
@@ -661,6 +688,13 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             onDismiss = { dialog = null }
         )
         null -> {}
+    }
+
+    if (vm.player.videoOpen) {
+        VideoDialog(vm.player) { vm.player.stop() }
+    }
+    if (playerSheet && vm.player.hasMedia && !vm.player.isVideo) {
+        PlayerSheet(vm.player) { playerSheet = false }
     }
 
     val docp = docPath
