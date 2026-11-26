@@ -9,6 +9,7 @@ import android.provider.DocumentsContract.Document
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -250,10 +251,12 @@ fun CloudScreen(vm: FmViewModel, onAddRoot: () -> Unit, onUpload: () -> Unit) {
                         Spacer(Modifier.size(16.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
-                                Fs.middleEllipsis(ci.name, 40),
+                                ci.name,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodyLarge
+                                softWrap = false,
+                                overflow = TextOverflow.Clip,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.basicMarquee(iterations = 1, initialDelayMillis = 2000)
                             )
                             val parts = ArrayList<String>()
                             if (!ci.isDir && ci.size > 0) parts.add(Fs.formatSize(ci.size))

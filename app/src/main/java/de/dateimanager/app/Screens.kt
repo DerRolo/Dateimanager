@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -297,7 +298,15 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                         val showTools = vm.section != Section.Storage && vm.section != Section.More && vm.section != Section.Cloud &&
                             !(vm.section == Section.Vault && !vm.vaultUnlocked) && !dupMode
                         TopAppBar(
-                            title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            title = {
+                                Text(
+                                    title,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Clip,
+                                    modifier = Modifier.basicMarquee(iterations = 1, initialDelayMillis = 2000)
+                                )
+                            },
                             navigationIcon = {
                                 if (ad != null || special) {
                                     IconButton(onClick = { vm.back() }) {

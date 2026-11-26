@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.os.Build
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -475,7 +476,7 @@ fun AlbumPickerDialog(
 
 // ---------- PDF-Schnellansicht ----------
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PdfSheet(path: String, onClose: () -> Unit, onOpen: () -> Unit) {
     val file = remember(path) { File(path) }
@@ -498,9 +499,10 @@ fun PdfSheet(path: String, onClose: () -> Unit, onOpen: () -> Unit) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     file.name,
-                    Modifier.weight(1f),
+                    Modifier.weight(1f).basicMarquee(iterations = 1, initialDelayMillis = 2000),
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
                     style = MaterialTheme.typography.titleMedium
                 )
                 TextButton(onClick = onOpen) { Text("Vollständig öffnen") }
@@ -831,11 +833,12 @@ fun FileRow(
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    Fs.middleEllipsis(item.name, 40),
+                    item.name,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
                     style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = Modifier.weight(1f, fill = false).basicMarquee(iterations = 1, initialDelayMillis = 2000)
                 )
                 BadgeIcons(dup, lock, fav, false, Modifier.padding(start = 6.dp))
             }
@@ -852,9 +855,11 @@ fun FileRow(
             Text(
                 parts.joinToString(" · "),
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.basicMarquee(iterations = 1, initialDelayMillis = 2500)
             )
         }
     }
@@ -918,11 +923,13 @@ fun FileTile(
             }
         }
         Text(
-            Fs.middleEllipsis(item.name, 30),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+            item.name,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp)
+                .basicMarquee(iterations = 1, initialDelayMillis = 2000)
         )
     }
 }
@@ -991,11 +998,12 @@ fun AlbumRow(
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    Fs.middleEllipsis(info.name, 40),
+                    info.name,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
                     style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = Modifier.weight(1f, fill = false).basicMarquee(iterations = 1, initialDelayMillis = 2000)
                 )
                 BadgeIcons(false, lock, fav, false, Modifier.padding(start = 6.dp))
             }
@@ -1040,11 +1048,13 @@ fun AlbumTile(
             )
         }
         Text(
-            Fs.middleEllipsis(info.name, 30),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+            info.name,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp)
+                .basicMarquee(iterations = 1, initialDelayMillis = 2000)
         )
     }
 }
