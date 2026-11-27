@@ -525,7 +525,12 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                         val activeHeaderIndex = dayHeaders.indexOfLast { it.first <= visibleRowIndex }.let { if (it >= 0) it else 0 }
                         val teaserHeader = when (scrollDirection) {
                             1 -> dayHeaders.getOrNull(activeHeaderIndex + 1) // older day while moving down
-                            -1 -> dayHeaders.getOrNull(activeHeaderIndex - 1) // newer day while moving up
+                            -1 -> if (activeHeaderIndex == 0 && scrollIndex > hc) {
+                                // While inside today's section (not at the very top), keep a jump-to-today chip visible.
+                                dayHeaders.getOrNull(0)
+                            } else {
+                                dayHeaders.getOrNull(activeHeaderIndex - 1) // newer day while moving up
+                            }
                             else -> null
                         }
                         if (vm.viewMode == ViewMode.List) {
