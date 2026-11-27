@@ -73,6 +73,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
@@ -488,23 +489,44 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                     val showFolder = vm.section != Section.Browse || vm.query.isNotBlank()
                     val hc = if (headerOn) 1 else 0
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        val dayHeaders = remember(rows) { rows.mapIndexedNotNull { i, r -> if (r is Row.Header && vm.section == Section.Recent) i to r.label else null } }
+                        val dayHeaders = remember(rows) { rows.mapIndexedNotNull { i, r -> if (r is Row.Header && vm.section == Section.Recent) i to r else null } }
                         val visibleIndex = (if (vm.viewMode == ViewMode.List) listState.firstVisibleItemIndex else gridState.firstVisibleItemIndex) - hc
-                        val activeDay = dayHeaders.lastOrNull { it.first <= visibleIndex }?.second ?: dayHeaders.firstOrNull()?.second
-                        var dayMenu by remember { mutableStateOf(false) }
-                        if (vm.section == Section.Recent && dayHeaders.isNotEmpty()) {
-                            Box(Modifier.align(Alignment.TopCenter).padding(top = 8.dp)) {
-                                Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.extraLarge, shadowElevation = 3.dp,
-                                    modifier = Modifier.clickable { dayMenu = true }) {
-                                    Text("▾  ${activeDay ?: "Tag auswählen"}", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSecondaryContainer)
-                                }
-                                DropdownMenu(expanded = dayMenu, onDismissRequest = { dayMenu = false }) {
-                                    dayHeaders.asReversed().forEach { (idx, label) ->
-                                        DropdownMenuItem(text = { Text(label) }, onClick = {
-                                            dayMenu = false
-                                            scope.launch { if (vm.viewMode == ViewMode.List) listState.animateScrollToItem(idx + hc) else gridState.animateScrollToItem(idx + hc) }
-                                        })
+                        val scrollIndex = if (vm.viewMode == ViewMode.List) listState.firstVisibleItemIndex else gridState.firstVisibleItemIndex
+                        var previousScrollIndex by remember { mutableIntStateOf(scrollIndex) }
+                        var scrollDirection by remember { mutableIntStateOf(0) } // -1 up, +1 down
+                        LaunchedEffect(scrollIndex) {
+                            if (scrollIndex != previousScrollIndex) scrollDirection = if (scrollIndex > previousScrollIndex) 1 else -1
+                            previousScrollIndex = scrollIndex
+                        }
+                        val activeHeaderIndex = dayHeaders.indexOfLast { it.first <= visibleIndex }.let { if (it >= 0) it else 0 }
+                        val teaserHeader = when (scrollDirection) {
+                            1 -> dayHeaders.getOrNull(activeHeaderIndex + 1)
+                            -1 -> dayHeaders.getOrNull(activeHeaderIndex - 1)
+                            else -> null
+                        }
+                        if (vm.section == Section.Recent && teaserHeader != null) {
+                            val (targetIndex, targetHeader) = teaserHeader
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                shape = MaterialTheme.shapes.large,
+                                shadowElevation = 5.dp,
+                                modifier = Modifier
+                                    .align(if (scrollDirection > 0) Alignment.BottomCenter else Alignment.TopCenter)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        scope.launch {
+                                            if (vm.viewMode == ViewMode.List) listState.animateScrollToItem(targetIndex + hc)
+                                            else gridState.animateScrollToItem(targetIndex + hc)
+                                        }
                                     }
+                            ) {
+                                Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(if (scrollDirection > 0) "↓" else "↑", style = MaterialTheme.typography.titleMedium)
+                                    Spacer(Modifier.size(10.dp))
+                                    Text(targetHeader.label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                                    if (targetHeader.paths.isNotEmpty()) Text("${targetHeader.paths.size} Dateien", style = MaterialTheme.typography.labelMedium)
                                 }
                             }
                         }
