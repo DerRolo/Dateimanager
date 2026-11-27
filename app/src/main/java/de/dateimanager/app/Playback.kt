@@ -2,6 +2,7 @@ package de.dateimanager.app
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.runtime.getValue
@@ -24,6 +25,7 @@ import java.io.File
 /** Läuft als Hintergrunddienst: Musik spielt weiter, auch wenn die App im Hintergrund ist (mit Benachrichtigung). */
 class PlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
+    private var servicePlayer: ExoPlayer? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -31,12 +33,25 @@ class PlaybackService : MediaSessionService() {
             .setAudioAttributes(AudioAttributes.DEFAULT, true)
             .setHandleAudioBecomingNoisy(true)
             .build()
+        servicePlayer = player
         session = MediaSession.Builder(this, player).build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
+    /** Stop playback when the user dismisses the app task from recents. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        servicePlayer?.let { player ->
+            player.stop()
+            player.clearMediaItems()
+        }
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
+        servicePlayer = null
+
         session?.let {
             it.player.release()
             it.release()

@@ -1160,6 +1160,12 @@ fun MoreScreen(onOpen: (Section, OtherFilter?) -> Unit) {
                 }
             }
         }
+        Text(
+            "Dateimanager · Version ${BuildConfig.VERSION_NAME}",
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 20.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

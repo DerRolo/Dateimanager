@@ -11,8 +11,8 @@ android {
         applicationId = "de.dateimanager.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
+        versionName = project.findProperty("appVersionName") as String? ?: "1"
     }
 
     // Feste Signatur, damit Updates über die alte Installation drüberinstalliert werden können

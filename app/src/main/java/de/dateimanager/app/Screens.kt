@@ -526,32 +526,6 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                             -1 -> dayHeaders.getOrNull(activeHeaderIndex - 1) // newer day while moving up
                             else -> null
                         }
-                        if (vm.section == Section.Recent && teaserHeader != null) {
-                            val (targetIndex, targetHeader) = teaserHeader
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                shape = MaterialTheme.shapes.large,
-                                shadowElevation = 5.dp,
-                                modifier = Modifier
-                                    .align(if (scrollDirection > 0) Alignment.BottomCenter else Alignment.TopCenter)
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        scope.launch {
-                                            if (vm.viewMode == ViewMode.List) listState.animateScrollToItem(targetIndex + hc)
-                                            else gridState.animateScrollToItem(targetIndex + hc)
-                                        }
-                                    }
-                            ) {
-                                Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text(if (scrollDirection > 0) "↓" else "↑", style = MaterialTheme.typography.titleMedium)
-                                    Spacer(Modifier.size(10.dp))
-                                    Text(targetHeader.label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                                    if (targetHeader.paths.isNotEmpty()) Text("${targetHeader.paths.size} Dateien", style = MaterialTheme.typography.labelMedium)
-                                }
-                            }
-                        }
                         if (vm.viewMode == ViewMode.List) {
                             LazyColumn(Modifier.fillMaxSize(), state = listState) {
                                 if (headerOn) {
@@ -690,6 +664,33 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                                 scrolling = gridState.isScrollInProgress,
                                 label = { idx -> rowLabel(rows, idx - hc, vm.sortBy) }
                             ) { i -> scope.launch { gridState.scrollToItem(i) } }
+                        }
+                        if (vm.section == Section.Recent && teaserHeader != null) {
+                            val (targetIndex, targetHeader) = teaserHeader
+                            Surface(
+                                color = Color(0xFFFF9800),
+                                contentColor = Color.White,
+                                shape = RoundedCornerShape(24.dp),
+                                shadowElevation = 12.dp,
+                                modifier = Modifier
+                                    .align(if (scrollDirection > 0) Alignment.BottomCenter else Alignment.TopCenter)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                                    .fillMaxWidth()
+                                    .heightIn(min = 68.dp)
+                                    .clickable {
+                                        scope.launch {
+                                            if (vm.viewMode == ViewMode.List) listState.animateScrollToItem(targetIndex + hc)
+                                            else gridState.animateScrollToItem(targetIndex + hc)
+                                        }
+                                    }
+                            ) {
+                                Row(Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(if (scrollDirection > 0) "↓" else "↑", style = MaterialTheme.typography.headlineSmall)
+                                    Spacer(Modifier.size(16.dp))
+                                    Text(targetHeader.label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                    if (targetHeader.paths.isNotEmpty()) Text("${targetHeader.paths.size} Dateien", style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
                         }
                     }
                 }
