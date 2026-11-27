@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -67,6 +68,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.DialogProperties
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -83,6 +85,10 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.Color
+import coil.compose.AsyncImage
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -124,6 +130,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
     var dialog by remember { mutableStateOf<Dlg?>(null) }
     var pdfPath by rememberSaveable { mutableStateOf<String?>(null) }
     var docPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var imagePreviewPath by rememberSaveable { mutableStateOf<String?>(null) }
     val loader = remember { ImageLoader.Builder(ctx).components { add(VideoFrameDecoder.Factory()) }.build() }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
@@ -192,6 +199,7 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
             item.isDir && vm.section == Section.Browse -> vm.openDir(File(item.path))
             item.isDir -> vm.showInFiles(item.path)
             vm.playInApp && (item.kind() == Kind.Audio || item.kind() == Kind.Video) -> startMedia(item)
+            item.kind() == Kind.Image -> imagePreviewPath = item.path
             item.ext == "pdf" && vm.pdfQuick -> pdfPath = item.path
             DocPreview.canPreview(item.ext) && vm.pdfQuick -> docPath = item.path
             else -> Fs.open(ctx, File(item.path))
@@ -480,6 +488,26 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                     val showFolder = vm.section != Section.Browse || vm.query.isNotBlank()
                     val hc = if (headerOn) 1 else 0
                     Box(Modifier.weight(1f).fillMaxWidth()) {
+                        val dayHeaders = remember(rows) { rows.mapIndexedNotNull { i, r -> if (r is Row.Header && vm.section == Section.Recent) i to r.label else null } }
+                        val visibleIndex = (if (vm.viewMode == ViewMode.List) listState.firstVisibleItemIndex else gridState.firstVisibleItemIndex) - hc
+                        val activeDay = dayHeaders.lastOrNull { it.first <= visibleIndex }?.second ?: dayHeaders.firstOrNull()?.second
+                        var dayMenu by remember { mutableStateOf(false) }
+                        if (vm.section == Section.Recent && dayHeaders.isNotEmpty()) {
+                            Box(Modifier.align(Alignment.TopCenter).padding(top = 8.dp)) {
+                                Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.extraLarge, shadowElevation = 3.dp,
+                                    modifier = Modifier.clickable { dayMenu = true }) {
+                                    Text("▾  ${activeDay ?: "Tag auswählen"}", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                }
+                                DropdownMenu(expanded = dayMenu, onDismissRequest = { dayMenu = false }) {
+                                    dayHeaders.asReversed().forEach { (idx, label) ->
+                                        DropdownMenuItem(text = { Text(label) }, onClick = {
+                                            dayMenu = false
+                                            scope.launch { if (vm.viewMode == ViewMode.List) listState.animateScrollToItem(idx + hc) else gridState.animateScrollToItem(idx + hc) }
+                                        })
+                                    }
+                                }
+                            }
+                        }
                         if (vm.viewMode == ViewMode.List) {
                             LazyColumn(Modifier.fillMaxSize(), state = listState) {
                                 if (headerOn) {
@@ -695,6 +723,22 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
     }
     if (playerSheet && vm.player.hasMedia && !vm.player.isVideo) {
         PlayerSheet(vm.player) { playerSheet = false }
+    }
+
+    val imagePath = imagePreviewPath
+    if (imagePath != null) {
+        BackHandler { imagePreviewPath = null }
+        Dialog(onDismissRequest = { imagePreviewPath = null }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+            Surface(Modifier.fillMaxSize(), color = Color.Black) {
+                Box(Modifier.fillMaxSize()) {
+                    AsyncImage(model = File(imagePath), contentDescription = File(imagePath).name, modifier = Modifier.fillMaxSize())
+                    Row(Modifier.align(Alignment.TopStart).fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { imagePreviewPath = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück", tint = Color.White) }
+                        Text(File(imagePath).name, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
     }
 
     val docp = docPath
