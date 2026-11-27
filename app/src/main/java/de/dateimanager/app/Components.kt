@@ -1160,12 +1160,6 @@ fun MoreScreen(onOpen: (Section, OtherFilter?) -> Unit) {
                 }
             }
         }
-        Text(
-            "Dateimanager · Version ${BuildConfig.VERSION_NAME}",
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 20.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -1364,14 +1358,19 @@ fun SwipeRow(
 ) {
     val favNow by rememberUpdatedState(onFavorite)
     val trashNow by rememberUpdatedState(onTrash)
-    val state = rememberSwipeToDismissBoxState(confirmValueChange = { v ->
-        if (v == SwipeToDismissBoxValue.StartToEnd) {
-            favNow()
-        } else if (v == SwipeToDismissBoxValue.EndToStart) {
-            trashNow()
+    // Require a deliberate horizontal swipe: the action threshold is raised to 75%.
+    // This reduces accidental favorite/delete actions while users scroll or lightly drag.
+    val state = rememberSwipeToDismissBoxState(
+        positionalThreshold = { distance -> distance * 0.75f },
+        confirmValueChange = { v ->
+            if (v == SwipeToDismissBoxValue.StartToEnd) {
+                favNow()
+            } else if (v == SwipeToDismissBoxValue.EndToStart) {
+                trashNow()
+            }
+            false
         }
-        false
-    })
+    )
     SwipeToDismissBox(
         state = state,
         enableDismissFromStartToEnd = enabled,
