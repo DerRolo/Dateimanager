@@ -1,4 +1,4 @@
-name: APK bauen
+name: APK bauen und versionieren
 
 on:
   push:
@@ -13,6 +13,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Nächste Versionsnummer bestimmen
+        id: version
+        shell: bash
+        run: |
+          git fetch --tags
+          latest=$(git tag --list 'v[0-9]*' | sed 's/^v//' | sort -n | tail -1)
+          if [ -z "$latest" ]; then latest=0; fi
+          next=$((latest + 1))
+          echo "number=$next" >> "$GITHUB_OUTPUT"
+          echo "name=$next" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -21,16 +33,16 @@ jobs:
         with:
           gradle-version: 8.7
       - name: APK bauen
-        run: gradle assembleRelease --no-daemon
-      - name: APK umbenennen
-        run: cp app/build/outputs/apk/release/app-release.apk Dateimanager.apk
+        run: gradle assembleRelease --no-daemon -PappVersionCode=${{ steps.version.outputs.number }} -PappVersionName=${{ steps.version.outputs.name }}
+      - name: APK benennen
+        run: cp app/build/outputs/apk/release/app-release.apk Dateimanager-v${{ steps.version.outputs.name }}.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: Dateimanager-APK
-          path: Dateimanager.apk
-      - name: Release "latest" aktualisieren
+          name: Dateimanager-v${{ steps.version.outputs.name }}-APK
+          path: Dateimanager-v${{ steps.version.outputs.name }}.apk
+      - name: Version Release veröffentlichen
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: Dateimanager (neueste Version)
-          files: Dateimanager.apk
+          tag_name: v${{ steps.version.outputs.name }}
+          name: Dateimanager Version ${{ steps.version.outputs.name }}
+          files: Dateimanager-v${{ steps.version.outputs.name }}.apk
