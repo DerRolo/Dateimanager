@@ -489,19 +489,41 @@ fun FileManagerApp(vm: FmViewModel = viewModel()) {
                     val showFolder = vm.section != Section.Browse || vm.query.isNotBlank()
                     val hc = if (headerOn) 1 else 0
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        val dayHeaders = remember(rows) { rows.mapIndexedNotNull { i, r -> if (r is Row.Header && vm.section == Section.Recent) i to r else null } }
-                        val visibleIndex = (if (vm.viewMode == ViewMode.List) listState.firstVisibleItemIndex else gridState.firstVisibleItemIndex) - hc
-                        val scrollIndex = if (vm.viewMode == ViewMode.List) listState.firstVisibleItemIndex else gridState.firstVisibleItemIndex
-                        var previousScrollIndex by remember { mutableIntStateOf(scrollIndex) }
-                        var scrollDirection by remember { mutableIntStateOf(0) } // -1 up, +1 down
-                        LaunchedEffect(scrollIndex) {
-                            if (scrollIndex != previousScrollIndex) scrollDirection = if (scrollIndex > previousScrollIndex) 1 else -1
-                            previousScrollIndex = scrollIndex
+                        val dayHeaders = remember(rows, vm.section) {
+                            if (vm.section == Section.Recent) rows.mapIndexedNotNull { i, r ->
+                                if (r is Row.Header) i to r else null
+                            } else emptyList()
                         }
-                        val activeHeaderIndex = dayHeaders.indexOfLast { it.first <= visibleIndex }.let { if (it >= 0) it else 0 }
+                        var scrollDirection by remember(vm.section, vm.viewMode) { mutableIntStateOf(0) } // -1 up, +1 down
+                        LaunchedEffect(vm.section, vm.viewMode, listState, gridState) {
+                            if (vm.viewMode == ViewMode.List) {
+                                var previous = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                                snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+                                    .collect { current ->
+                                        if (current != previous) {
+                                            scrollDirection = if (current.first > previous.first ||
+                                                (current.first == previous.first && current.second > previous.second)) 1 else -1
+                                            previous = current
+                                        }
+                                    }
+                            } else {
+                                var previous = gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
+                                snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+                                    .collect { current ->
+                                        if (current != previous) {
+                                            scrollDirection = if (current.first > previous.first ||
+                                                (current.first == previous.first && current.second > previous.second)) 1 else -1
+                                            previous = current
+                                        }
+                                    }
+                            }
+                        }
+                        val scrollIndex = if (vm.viewMode == ViewMode.List) listState.firstVisibleItemIndex else gridState.firstVisibleItemIndex
+                        val visibleRowIndex = scrollIndex - hc
+                        val activeHeaderIndex = dayHeaders.indexOfLast { it.first <= visibleRowIndex }.let { if (it >= 0) it else 0 }
                         val teaserHeader = when (scrollDirection) {
-                            1 -> dayHeaders.getOrNull(activeHeaderIndex + 1)
-                            -1 -> dayHeaders.getOrNull(activeHeaderIndex - 1)
+                            1 -> dayHeaders.getOrNull(activeHeaderIndex + 1) // older day while moving down
+                            -1 -> dayHeaders.getOrNull(activeHeaderIndex - 1) // newer day while moving up
                             else -> null
                         }
                         if (vm.section == Section.Recent && teaserHeader != null) {
